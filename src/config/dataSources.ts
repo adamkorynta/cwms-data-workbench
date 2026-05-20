@@ -18,7 +18,7 @@ export const dataSources: CdaDataSource[] = [
   },
 ];
 
-export const defaultDataSource = dataSources[2];
+export const defaultDataSource = dataSources[0];
 
 export function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;

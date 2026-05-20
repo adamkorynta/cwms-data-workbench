@@ -43,7 +43,7 @@ describe("visible column preferences", () => {
     saveVisibleColumns("locations", ["publicName"]);
 
     expect(loadVisibleColumns("locations", ["location", "office"], ["location"]))
-      .toEqual(["publicName"]);
+      .toEqual(["location", "publicName"]);
   });
 
   it("falls back to defaults when no saved selection exists", () => {

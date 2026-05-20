@@ -25,10 +25,15 @@ interface InventoryGridProps {
 export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, onAddSelections, onLoadChildren, toolbar }: InventoryGridProps) {
   const defaultColumns = dataset.columns.filter((column) => column.defaultVisible !== false).map((column) => column.id);
   const requiredVisibleColumns = useMemo(() => {
+    if (tabId === "ratings") {
+      return dataset.columns
+        .filter((column) => column.group === "Identification")
+        .map((column) => column.id);
+    }
     if (tabId === "location-groups") return ["name", "office", "alias"];
     if (tabId === "time-series") return ["timeSeriesId", "timezone", "first", "last", "intervalOffset"];
     return [];
-  }, [tabId]);
+  }, [dataset.columns, tabId]);
   const showSelectionColumn = tabId !== "locations" && tabId !== "ratings" && dataset.rows.some((row) => row.selectable !== false);
 
   const formatCellValue = (columnId: string, value: unknown) => {

@@ -53,7 +53,7 @@ export function loadVisibleColumns(tabId: TabId, defaultColumns: string[], requi
     return fallbackColumns;
   }
 
-  return savedSelection;
+  return unique([...requiredColumns, ...savedSelection]);
 }
 
 export function saveVisibleColumns(tabId: TabId, visibleColumns: string[]) {

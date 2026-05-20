@@ -1,0 +1,38 @@
+{
+  "name": "cwms-web-client",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:pages": "tsc -b && vite build --base=/cwms-data-workbench/",
+    "preview": "vite preview",
+    "preview:pages": "vite preview --host 0.0.0.0 --port 4173",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-virtual": "^3.13.24",
+    "@usace/groundwork": "^4.1.0",
+    "cwmsjs": "^2.4.0-2026.3.16",
+    "lucide-react": "^0.468.0",
+    "plotly.js": "^3.5.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-plotly.js": "^2.6.0",
+    "recharts": "^2.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@types/react-plotly.js": "^2.6.4",
+    "@vitejs/plugin-react": "^6.0.2",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2",
+    "vite": "^8.0.0",
+    "vitest": "^2.1.8"
+  }
+}

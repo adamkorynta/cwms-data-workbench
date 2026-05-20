@@ -1,0 +1,1 @@
+export { fetchLocationsInventory } from "./inventoryServices";

@@ -34,7 +34,7 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
     if (tabId === "time-series") return ["timeSeriesId", "timezone", "first", "last", "intervalOffset"];
     return [];
   }, [dataset.columns, tabId]);
-  const showSelectionColumn = tabId !== "locations" && tabId !== "ratings" && dataset.rows.some((row) => row.selectable !== false);
+  const showSelectionColumn = tabId !== "ratings" && dataset.rows.some((row) => row.selectable !== false);
 
   const formatCellValue = (columnId: string, value: unknown) => {
     if (tabId === "time-series" && columnId === "intervalOffset") {
@@ -269,6 +269,14 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
       kind: row.kind,
       office: row.office,
       units: typeof row.units === "string" ? row.units : undefined,
+      locationId:
+        typeof row.location === "string" && row.location.trim().length > 0
+          ? row.location
+          : row.kind === "location"
+            ? row.label
+            : undefined,
+      latitude: typeof row.latitude === "number" ? row.latitude : undefined,
+      longitude: typeof row.longitude === "number" ? row.longitude : undefined,
       tabId,
     }));
 

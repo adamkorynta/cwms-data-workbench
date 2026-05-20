@@ -1,4 +1,4 @@
-import { BarChart3, Table2, Trash2, X } from "lucide-react";
+import { BarChart3, MapPinned, Table2, Trash2, X } from "lucide-react";
 import type { SelectedEntity } from "../types";
 import { GwButton } from "./GroundworkControls";
 
@@ -8,9 +8,10 @@ interface SelectionTrayProps {
   onClear: () => void;
   onOpenPlot: () => void;
   onOpenTable: () => void;
+  onOpenMap: () => void;
 }
 
-export function SelectionTray({ selections, onRemove, onClear, onOpenPlot, onOpenTable }: SelectionTrayProps) {
+export function SelectionTray({ selections, onRemove, onClear, onOpenPlot, onOpenTable, onOpenMap }: SelectionTrayProps) {
   const counts = selections.reduce<Record<string, number>>((acc, item) => {
     acc[item.kind] = (acc[item.kind] ?? 0) + 1;
     return acc;
@@ -44,6 +45,10 @@ export function SelectionTray({ selections, onRemove, onClear, onOpenPlot, onOpe
         <GwButton type="button" onClick={onOpenTable} disabled={!selections.length}>
           <Table2 size={14} />
           Tabulate
+        </GwButton>
+        <GwButton type="button" onClick={onOpenMap} disabled={!selections.length}>
+          <MapPinned size={14} />
+          Map
         </GwButton>
         <GwButton type="button" onClick={onClear}>
           <Trash2 size={14} />

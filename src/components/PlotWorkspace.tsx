@@ -3,7 +3,9 @@ import PlotImport from "react-plotly.js";
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fetchPlotData, fetchPlotSeriesData, type PlotSeriesData } from "../services/inventoryServices";
+import { fetchLocationMetadataById } from "../services/locationMetadataService";
 import { GwCheckbox, GwInput } from "./GroundworkControls";
+import { GeoSelectionMap } from "./GeoSelectionMap";
 import type { PlotPoint, SelectedEntity, TimeWindow } from "../types";
 
 const PlotComponent = (() => {
@@ -15,7 +17,7 @@ const PlotComponent = (() => {
 
 interface PlotWorkspaceProps {
   open: boolean;
-  initialMode?: "chart" | "table";
+  initialMode?: "chart" | "table" | "map";
   selections: SelectedEntity[];
   timeWindow: TimeWindow;
   timezone: string;
@@ -24,6 +26,15 @@ interface PlotWorkspaceProps {
 
 interface ParameterGroup {
   parameter: string;
+  series: SelectedEntity[];
+}
+
+interface MapLocationPoint {
+  locationId: string;
+  latitude: number;
+  longitude: number;
+  locationKind?: string;
+  locationSelected: boolean;
   series: SelectedEntity[];
 }
 
@@ -80,6 +91,48 @@ function formatNumericCell(value: unknown, precision: number): string {
   return String(value);
 }
 
+function parseCoordinate(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function sanitizeLocationId(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function getSeriesLocationId(selection: SelectedEntity): string {
+  if (selection.locationId && selection.locationId.trim().length > 0) return sanitizeLocationId(selection.locationId);
+  const parts = selection.label.split(".");
+  return sanitizeLocationId(parts[0] ?? selection.label);
+}
+
+function buildAsciiSparkline(values: number[], targetLength = 16): string {
+  if (!values.length) return "No data";
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const chars = ".:-=+*#%@";
+  const samples = values.length <= targetLength
+    ? values
+    : Array.from({ length: targetLength }, (_, index) => {
+        const sourceIndex = Math.floor((index * (values.length - 1)) / Math.max(targetLength - 1, 1));
+        return values[sourceIndex];
+      });
+
+  return samples
+    .map((value) => {
+      const normalized = (value - min) / span;
+      const charIndex = Math.min(chars.length - 1, Math.max(0, Math.round(normalized * (chars.length - 1))));
+      return chars[charIndex];
+    })
+    .join("");
+}
+
 function getGroupYAxisTitle(group: ParameterGroup): string {
   const parameterLabel = group.parameter?.trim() || "Parameter";
   const units = Array.from(new Set(group.series.map((series) => series.units).filter((unit): unit is string => Boolean(unit?.trim()))));
@@ -124,9 +177,11 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
   const [seriesData, setSeriesData] = useState<PlotSeriesData[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<"chart" | "table">(initialMode);
+  const [mode, setMode] = useState<"chart" | "table" | "map">(initialMode);
   const [precision, setPrecision] = useState(2);
   const [showQualityValues, setShowQualityValues] = useState(false);
+  const [locationCoordinates, setLocationCoordinates] = useState<Map<string, { latitude?: number; longitude?: number; locationKind?: string }>>(new Map());
+  const [selectedMapLocationId, setSelectedMapLocationId] = useState<string | null>(null);
   const tableContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -135,6 +190,36 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
 
   useEffect(() => {
     if (!open) setShowQualityValues(false);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) setSelectedMapLocationId(null);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+
+    fetchLocationMetadataById()
+      .then((metadataById) => {
+        if (!active) return;
+        const byLocation = new Map<string, { latitude?: number; longitude?: number; locationKind?: string }>();
+        metadataById.forEach((metadata, locationId) => {
+          byLocation.set(sanitizeLocationId(locationId), {
+            latitude: parseCoordinate(metadata.latitude ?? metadata.publishedLatitude),
+            longitude: parseCoordinate(metadata.longitude ?? metadata.publishedLongitude),
+            locationKind: typeof metadata.locationKind === "string" ? metadata.locationKind : undefined,
+          });
+        });
+        setLocationCoordinates(byLocation);
+      })
+      .catch(() => {
+        if (active) setLocationCoordinates(new Map());
+      });
+
+    return () => {
+      active = false;
+    };
   }, [open]);
 
   const parameterGroups = useMemo(() => {
@@ -154,6 +239,113 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
   }, [selections]);
 
   const selectedSeries = useMemo(() => parameterGroups.flatMap((group) => group.series), [parameterGroups]);
+
+  const mapPoints = useMemo<MapLocationPoint[]>(() => {
+    const byLocation = new Map<string, MapLocationPoint>();
+
+    const upsertLocation = (
+      locationIdRaw: string,
+      options: {
+        latitude?: number;
+        longitude?: number;
+        locationKind?: string;
+        locationSelected?: boolean;
+        series?: SelectedEntity;
+      },
+    ) => {
+      const locationId = sanitizeLocationId(locationIdRaw);
+      if (!locationId) return;
+
+      const existing = byLocation.get(locationId) ?? {
+        locationId,
+        latitude: Number.NaN,
+        longitude: Number.NaN,
+        locationSelected: false,
+        series: [],
+      };
+
+      const fallback = locationCoordinates.get(locationId);
+      const lat = options.latitude ?? fallback?.latitude;
+      const lon = options.longitude ?? fallback?.longitude;
+      const locationKind = options.locationKind ?? fallback?.locationKind;
+
+      if (typeof lat === "number" && Number.isFinite(lat)) existing.latitude = lat;
+      if (typeof lon === "number" && Number.isFinite(lon)) existing.longitude = lon;
+      if (typeof locationKind === "string" && locationKind.trim().length > 0) existing.locationKind = locationKind;
+      if (options.locationSelected) existing.locationSelected = true;
+      if (options.series) existing.series.push(options.series);
+
+      byLocation.set(locationId, existing);
+    };
+
+    for (const selection of selections) {
+      if (selection.kind === "location") {
+        upsertLocation(selection.locationId ?? selection.label, {
+          latitude: parseCoordinate(selection.latitude),
+          longitude: parseCoordinate(selection.longitude),
+          locationSelected: true,
+        });
+      }
+
+      if (selection.kind === "timeSeries") {
+        upsertLocation(getSeriesLocationId(selection), {
+          latitude: parseCoordinate(selection.latitude),
+          longitude: parseCoordinate(selection.longitude),
+          series: selection,
+        });
+      }
+    }
+
+    return Array.from(byLocation.values()).filter(
+      (point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude),
+    );
+  }, [locationCoordinates, selections]);
+
+  const sparklineByLocation = useMemo(() => {
+    const sparklines = new Map<string, string>();
+
+    for (const point of mapPoints) {
+      const values = point.series.flatMap((series) => {
+        const points = seriesData.find((candidate) => candidate.seriesName === series.label)?.points ?? [];
+        return points
+          .map((candidate) => candidate.value)
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+      });
+      sparklines.set(point.locationId, buildAsciiSparkline(values));
+    }
+
+    return sparklines;
+  }, [mapPoints, seriesData]);
+
+  const hasMapEligibleSelection = useMemo(
+    () => selections.some((selection) => selection.kind === "location" || selection.kind === "timeSeries"),
+    [selections],
+  );
+
+  const mapRenderPoints = useMemo(
+    () =>
+      mapPoints.map((point) => {
+        const sparklineValues = point.series.flatMap((series) => {
+          const points = seriesData.find((candidate) => candidate.seriesName === series.label)?.points ?? [];
+          return points
+            .map((candidate) => candidate.value)
+            .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+        });
+
+        return {
+          locationId: point.locationId,
+          latitude: point.latitude,
+          longitude: point.longitude,
+          locationKind: point.locationKind,
+          locationSelected: point.locationSelected,
+          seriesCount: point.series.length,
+          seriesIds: point.series.map((series) => series.label),
+          sparklineValues: sparklineValues.slice(-32),
+          sparklineLabel: sparklineByLocation.get(point.locationId) ?? "No data",
+        };
+      }),
+    [mapPoints, seriesData, sparklineByLocation],
+  );
 
   const timezoneId = useMemo(() => extractTimeZoneId(timezone), [timezone]);
 
@@ -219,16 +411,17 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
 
   return (
     <div className="modal-backdrop plot-backdrop">
-      <section className="plot-workspace" role="dialog" aria-modal="true" aria-label="Plot and Tabulation Workspace">
+      <section className="plot-workspace" role="dialog" aria-modal="true" aria-label="Visualization Workspace">
         <header>
           <div>
-            <strong>Plot and Tabulation</strong>
+            <strong>Visualization Workspace</strong>
           </div>
           <button type="button" onClick={onClose} aria-label="Close plot workspace"><X size={16} /></button>
         </header>
         <div className="segmented">
           <button type="button" className={mode === "chart" ? "active" : ""} onClick={() => setMode("chart")}>Chart</button>
           <button type="button" className={mode === "table" ? "active" : ""} onClick={() => setMode("table")}>Table</button>
+          <button type="button" className={mode === "map" ? "active" : ""} onClick={() => setMode("map")}>Map</button>
           <div className="plot-shared-controls">
             <label htmlFor="plot-precision">Precision</label>
             <GwInput
@@ -266,6 +459,50 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
             <strong>Unable to load plot data.</strong>
             <span>{error}</span>
           </div>
+        ) : mode === "map" ? (
+          !hasMapEligibleSelection ? (
+            <div className="state-overlay">Select locations or time series to open a map.</div>
+          ) : !mapPoints.length ? (
+            <div className="state-overlay">No mapped coordinates available in the current selection.</div>
+          ) : (
+            <div className="map-panel">
+              <div className="map-plot-wrap">
+                <GeoSelectionMap points={mapRenderPoints} selectedLocationId={selectedMapLocationId} />
+              </div>
+              <section className="map-summary" aria-label="Map series summary">
+                <strong>Series Summary</strong>
+                <div className="map-summary-grid">
+                  {mapRenderPoints.map((point) => (
+                    <article
+                      key={point.locationId}
+                      className={selectedMapLocationId === point.locationId ? "map-summary-card active" : "map-summary-card"}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedMapLocationId(point.locationId)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedMapLocationId(point.locationId);
+                        }
+                      }}
+                    >
+                      <div>
+                        <span>{point.locationId}</span>
+                        <small>{point.seriesCount} time series</small>
+                      </div>
+                      {point.seriesIds.length > 0 && (
+                        <ul className="map-summary-id-list" aria-label={`Series ids for ${point.locationId}`}>
+                          {point.seriesIds.map((seriesId) => (
+                            <li key={seriesId}>{seriesId}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </div>
+          )
         ) : !parameterGroups.length ? (
           <div className="state-overlay">No time series selected for plotting.</div>
         ) : mode === "chart" ? (

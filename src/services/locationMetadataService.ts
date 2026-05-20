@@ -102,6 +102,7 @@ export function enrichTimeSeriesRowWithLocationMetadata(row: InventoryRow, metad
     longName: metadata.longName ?? metadata.publicName ?? row.longName,
     publicName: metadata.publicName ?? metadata.longName ?? row.publicName,
     timezone: coalesceText(row.timezone, metadata.timezone),
+    locationKind: metadata.locationKind ?? row.locationKind,
     latitude: metadata.latitude ?? metadata.publishedLatitude ?? row.latitude,
     longitude: metadata.longitude ?? row.longitude,
     aliases: {

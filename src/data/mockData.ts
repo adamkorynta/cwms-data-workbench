@@ -57,6 +57,7 @@ export const timeSeriesDataset: InventoryDataset = {
     { id: "last", header: "Last", accessorKey: "last", group: "Time Range", defaultVisible: true },
     { id: "eccc", header: "ECCC TS Acquisition", accessorKey: "eccc", group: "Data Acquisition", defaultVisible: false },
     { id: "shef", header: "SHEF Data Acquisition", accessorKey: "shef", group: "Data Acquisition", defaultVisible: false },
+    { id: "locationKind", header: "Location Kind", accessorKey: "locationKind", group: "Geography", defaultVisible: true },
     { id: "latitude", header: "Latitude", accessorKey: "latitude", group: "Geography", defaultVisible: false },
     { id: "longitude", header: "Longitude", accessorKey: "longitude", group: "Geography", defaultVisible: false },
     ...aliasColumnDefs(),

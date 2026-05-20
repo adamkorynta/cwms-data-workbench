@@ -26,7 +26,7 @@ import type { AppSettings, CdaOffice, InventoryDataset, SelectedEntity, TabId } 
 import { loadPreferences, savePreferences } from "./utils/preferences";
 import { defaultTimeWindow } from "./utils/timeWindow";
 
-type PlotWorkspaceMode = "chart" | "table";
+type PlotWorkspaceMode = "chart" | "table" | "map";
 
 const tabs: TabDefinition[] = [
   { id: "time-series", label: "Time Series" },
@@ -167,6 +167,7 @@ export function App() {
         onClear={() => setSelections([])}
         onOpenPlot={() => handleOpenPlotWorkspace("chart")}
         onOpenTable={() => handleOpenPlotWorkspace("table")}
+        onOpenMap={() => handleOpenPlotWorkspace("map")}
       />
       <FooterStatus settings={settings} onOpenTimeWindow={() => setTimeWindowOpen(true)} />
       <TimeWindowDialog

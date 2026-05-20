@@ -58,6 +58,9 @@ export interface SelectedEntity {
   kind: EntityKind;
   office?: string;
   units?: string;
+  locationId?: string;
+  latitude?: number;
+  longitude?: number;
   tabId: TabId;
 }
 

@@ -1,6 +1,14 @@
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { configureCdaClient } from "./api/cdaClient";
+import {
+  configureCdaClient,
+  extractCdaAccessTokenFromUrl,
+  getCdaConfig,
+  loadCdaAccessTokenFromSession,
+  setCdaAccessToken,
+  setCdaApiKey,
+} from "./api/cdaClient";
+import { AuthMethodDialog } from "./components/AuthMethodDialog";
 import { AppShell } from "./components/AppShell";
 import { FooterStatus } from "./components/FooterStatus";
 import { GwButton } from "./components/GroundworkControls";
@@ -21,12 +29,16 @@ import {
   fetchTimeSeriesGroupsInventory,
   fetchTimeSeriesInventory,
 } from "./services/inventoryServices";
+import { beginOidcLogin, completeOidcLoginFromUrl, fetchOidcBootstrapConfig } from "./services/oidcService";
 import { fetchOffices } from "./services/officesService";
+import { fetchUserProfile } from "./services/userProfileService";
 import type { AppSettings, CdaOffice, InventoryDataset, SelectedEntity, TabId } from "./types";
 import { loadPreferences, savePreferences } from "./utils/preferences";
 import { defaultTimeWindow } from "./utils/timeWindow";
 
 type PlotWorkspaceMode = "chart" | "table" | "map";
+type AuthMode = "none" | "oidc" | "apikey";
+const oidcLoginPendingKey = "cwms-oidc-login-pending";
 
 const tabs: TabDefinition[] = [
   { id: "time-series", label: "Time Series" },
@@ -48,9 +60,18 @@ const loaders: Record<TabId, () => Promise<InventoryDataset>> = {
   measurements: fetchMeasurementsInventory,
 };
 
+const userProfileTimeoutMs = 15000;
+
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>("time-series");
   const preferences = useMemo(loadPreferences, []);
+  const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>("none");
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const [authDialogError, setAuthDialogError] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings>({
     baseUrl: preferences.baseUrl,
     office: preferences.office,
@@ -58,6 +79,8 @@ export function App() {
     timezone: "Local Time PST",
     unitSystem: "English",
     timeWindow: defaultTimeWindow,
+    authStatus: undefined,
+    authDetail: undefined,
   });
   const [offices, setOffices] = useState<CdaOffice[]>([]);
   const [officesLoading, setOfficesLoading] = useState(false);
@@ -68,6 +91,116 @@ export function App() {
   const [plotInitialMode, setPlotInitialMode] = useState<PlotWorkspaceMode>("chart");
   const [editorOpen, setEditorOpen] = useState(false);
 
+  const hydrateUserFromCda = useCallback(
+    async (baseUrl: string, signal?: AbortSignal) => {
+      setSettings((current) => ({
+        ...current,
+        authStatus: "Checking /user/profile...",
+        authDetail: undefined,
+      }));
+      const profile = await fetchUserProfile(baseUrl, signal);
+      const displayName = profile.email ?? profile.username;
+      let authDetail: string | undefined;
+      if (profile.principal) {
+        authDetail = `principal: ${profile.principal}`;
+        if (profile.cacAuth !== undefined) {
+          authDetail += profile.cacAuth ? ", CAC: yes" : ", CAC: no";
+        }
+      } else if (profile.cacAuth !== undefined) {
+        authDetail = `CAC: ${profile.cacAuth ? "yes" : "no"}`;
+      }
+
+      setSettings((current) => ({
+        ...current,
+        user: displayName,
+        authStatus: `Logged in as ${displayName}`,
+        authDetail,
+      }));
+
+      if (globalThis.sessionStorage.getItem(oidcLoginPendingKey) === "1") {
+        globalThis.sessionStorage.removeItem(oidcLoginPendingKey);
+        globalThis.alert(`Login confirmed for ${displayName}.`);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    loadCdaAccessTokenFromSession();
+    const controller = new AbortController();
+    let cancelled = false;
+
+    const resolveOidcCallback = async () => {
+      const existingApiKey = getCdaConfig().apiKey;
+      if (existingApiKey) {
+        setAuthMode("apikey");
+        setAuthError(null);
+        setAuthReady(true);
+        setSettings((current) => ({
+          ...current,
+          user: "API key session",
+          authStatus: "Authenticated with API key",
+          authDetail: `key length: ${existingApiKey.length}`,
+        }));
+        return;
+      }
+
+      const extractedToken = extractCdaAccessTokenFromUrl();
+      if (extractedToken) {
+        setAuthMode("oidc");
+        setSettings((current) => ({
+          ...current,
+          authStatus: "JWT captured from login callback",
+          authDetail: `token length: ${extractedToken.length}`,
+        }));
+        setAuthError(null);
+        setAuthReady(true);
+        return;
+      }
+
+      const completion = await completeOidcLoginFromUrl(settings.baseUrl, controller.signal);
+      if (cancelled) return;
+
+      if (completion?.status === "error") {
+        const message = completion.errorDescription ?? completion.error ?? "OIDC login failed.";
+        setAuthMode("none");
+        setAuthError(message);
+        setAuthReady(false);
+        setSettings((current) => ({
+          ...current,
+          user: "Not signed in",
+          authStatus: `OIDC login error: ${completion.error ?? "unknown"}`,
+          authDetail: message,
+        }));
+        return;
+      }
+
+      if (completion?.status === "success") {
+        setAuthMode("oidc");
+        setAuthError(null);
+        setSettings((current) => ({
+          ...current,
+          authStatus: "JWT captured from authorization code exchange",
+          authDetail: `token length: ${completion.accessToken?.length ?? 0}`,
+        }));
+      }
+
+      setAuthReady(true);
+    };
+
+    resolveOidcCallback().catch((error_: unknown) => {
+      if (!cancelled) {
+        setAuthError(error_ instanceof Error ? error_.message : "Unable to complete OIDC login.");
+        setAuthReady(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     setOfficesLoading(true);
@@ -76,19 +209,17 @@ export function App() {
     fetchOffices(settings.baseUrl, controller.signal)
       .then((nextOffices) => {
         setOffices(nextOffices);
-        if (nextOffices.length > 0) {
-          setSettings((current) => {
-            if (nextOffices.some((office) => office.id === current.office)) return current;
-            const nextOffice = nextOffices[0].id;
-            savePreferences({ office: nextOffice });
-            return { ...current, office: nextOffice };
-          });
-        }
+        if (nextOffices.length === 0) return;
+        if (nextOffices.some((office) => office.id === settings.office)) return;
+
+        const nextOffice = nextOffices[0].id;
+        savePreferences({ office: nextOffice });
+        setSettings((current) => ({ ...current, office: nextOffice }));
       })
-      .catch((caught: unknown) => {
+      .catch((error_: unknown) => {
         if (!controller.signal.aborted) {
           setOffices([]);
-          setOfficesError(caught instanceof Error ? caught.message : "Unable to load offices.");
+          setOfficesError(error_ instanceof Error ? error_.message : "Unable to load offices.");
         }
       })
       .finally(() => {
@@ -97,6 +228,44 @@ export function App() {
 
     return () => controller.abort();
   }, [settings.baseUrl]);
+
+  useEffect(() => {
+    if (!authReady || authError || authMode !== "oidc") return;
+
+    const controller = new AbortController();
+    const timeoutId = globalThis.setTimeout(() => controller.abort(), userProfileTimeoutMs);
+
+    hydrateUserFromCda(settings.baseUrl, controller.signal).catch((error_: unknown) => {
+      if (controller.signal.aborted) {
+        setSettings((current) => ({
+          ...current,
+          user: "Not signed in",
+          authStatus: "Profile check timed out",
+          authDetail: `No /user/profile response within ${Math.round(userProfileTimeoutMs / 1000)} seconds.`,
+        }));
+      } else {
+        const message = error_ instanceof Error ? error_.message : "Unable to confirm login from /user/profile.";
+        setSettings((current) => ({
+          ...current,
+          user: "Not signed in",
+          authStatus: "Profile check failed",
+          authDetail: message,
+        }));
+      }
+
+      if (globalThis.sessionStorage.getItem(oidcLoginPendingKey) === "1") {
+        globalThis.sessionStorage.removeItem(oidcLoginPendingKey);
+        globalThis.alert("Login could not be confirmed from /user/profile.");
+      }
+    }).finally(() => {
+      globalThis.clearTimeout(timeoutId);
+    });
+
+    return () => {
+      globalThis.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [authMode, authReady, authError, hydrateUserFromCda, settings.baseUrl]);
 
   const loader = useCallback(() => {
     configureCdaClient({ baseUrl: settings.baseUrl, office: settings.office, timezone: settings.timezone });
@@ -115,8 +284,13 @@ export function App() {
 
   const handleDataSourceChange = (baseUrl: string) => {
     const normalized = normalizeBaseUrl(baseUrl);
+    setCdaAccessToken(undefined);
+    setCdaApiKey(undefined);
     setSelections([]);
-    setSettings((current) => ({ ...current, baseUrl: normalized }));
+    setAuthReady(false);
+    setAuthError(null);
+    setAuthMode("none");
+    setSettings((current) => ({ ...current, baseUrl: normalized, user: "Not signed in", authStatus: undefined, authDetail: undefined }));
     savePreferences({ baseUrl: normalized });
   };
 
@@ -131,6 +305,70 @@ export function App() {
     setPlotOpen(true);
   };
 
+  const handleIdpLogin = async () => {
+    setAuthBusy(true);
+    setAuthDialogError(null);
+    try {
+      setSettings((current) => ({
+        ...current,
+        authStatus: "Redirecting to OIDC login...",
+        authDetail: undefined,
+      }));
+      const oidc = await fetchOidcBootstrapConfig(settings.baseUrl);
+      const authorizeUrl = await beginOidcLogin(oidc, globalThis.location.origin + globalThis.location.pathname);
+      globalThis.sessionStorage.setItem(oidcLoginPendingKey, "1");
+      setAuthDialogOpen(false);
+      globalThis.location.assign(authorizeUrl);
+    } catch {
+      setSettings((current) => ({
+        ...current,
+        authStatus: "Login bootstrap failed",
+        authDetail: "Could not load OpenIDConnect metadata from CDA.",
+      }));
+      setAuthDialogError("Could not load OpenIDConnect metadata from CDA for this host.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleApiKeyLogin = () => {
+    const normalizedApiKey = apiKeyDraft.trim();
+    if (!normalizedApiKey) {
+      setAuthDialogError("Provide an API key before continuing.");
+      return;
+    }
+
+    setCdaAccessToken(undefined);
+    setCdaApiKey(normalizedApiKey);
+    setAuthMode("apikey");
+    setAuthError(null);
+    setAuthReady(true);
+    setAuthDialogOpen(false);
+    setApiKeyDraft("");
+    setAuthDialogError(null);
+    setSettings((current) => ({
+      ...current,
+      user: "API key session",
+      authStatus: "Authenticated with API key",
+      authDetail: `key length: ${normalizedApiKey.length}`,
+    }));
+  };
+
+  const handleLogin = () => {
+    setAuthDialogError(null);
+    setApiKeyDraft("");
+    setAuthDialogOpen(true);
+  };
+
+  const handleLogout = () => {
+    setCdaAccessToken(undefined);
+    setCdaApiKey(undefined);
+    setAuthReady(false);
+    setAuthError(null);
+    setAuthMode("none");
+    setSettings((current) => ({ ...current, user: "Not signed in", authStatus: "Signed out", authDetail: undefined }));
+  };
+
   return (
     <AppShell
       settings={settings}
@@ -139,6 +377,8 @@ export function App() {
       officesError={officesError}
       onDataSourceChange={handleDataSourceChange}
       onOfficeChange={handleOfficeChange}
+      onLogin={handleLogin}
+      onLogout={handleLogout}
     >
       <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
       <main className="main-workbench">
@@ -185,6 +425,20 @@ export function App() {
         onClose={() => setPlotOpen(false)}
       />
       <TimeSeriesEditor open={editorOpen} onClose={() => setEditorOpen(false)} />
+      <AuthMethodDialog
+        open={authDialogOpen}
+        apiKey={apiKeyDraft}
+        busy={authBusy}
+        error={authDialogError}
+        onApiKeyChange={setApiKeyDraft}
+        onUseApiKey={handleApiKeyLogin}
+        onUseIdp={handleIdpLogin}
+        onClose={() => {
+          if (authBusy) return;
+          setAuthDialogOpen(false);
+          setAuthDialogError(null);
+        }}
+      />
     </AppShell>
   );
 }

@@ -1,14 +1,14 @@
 import { flexRender, getCoreRowModel, getFilteredRowModel, getSortedRowModel, useReactTable, type ColumnDef, type ColumnFiltersState } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, ChevronRight, RefreshCw, SearchX } from "lucide-react";
+import { ChevronDown, ChevronRight, MoreHorizontal, RefreshCw, SearchX } from "lucide-react";
 import { flushSync } from "react-dom";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { InventoryDataset, InventoryRow, SelectedEntity, TabId } from "../types";
 import { asDisplay, getValueByPath } from "../utils/ids";
 import { loadVisibleColumns, saveVisibleColumns } from "../utils/preferences";
 import { ColumnDrawer } from "./ColumnDrawer";
-import { DetailDrawer } from "./DetailDrawer";
 import { GwButton, GwCheckbox, GwInput } from "./GroundworkControls";
+import { RatingEffectiveDateEditor } from "./RatingEffectiveDateEditor";
 
 interface InventoryGridProps {
   tabId: TabId;
@@ -22,7 +22,17 @@ interface InventoryGridProps {
   toolbar?: React.ReactNode;
 }
 
+interface RowActionsMenuState {
+  rowId: string;
+  label: string;
+  x: number;
+  y: number;
+}
+
+const selectionFlightEventName = "cwms:selection-flight";
+
 export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, onAddSelections, onLoadChildren, toolbar }: InventoryGridProps) {
+  const actionsColumnId = "__actions__";
   const defaultColumns = dataset.columns.filter((column) => column.defaultVisible !== false).map((column) => column.id);
   const requiredVisibleColumns = useMemo(() => {
     if (tabId === "ratings") {
@@ -71,9 +81,47 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [injectedRows, setInjectedRows] = useState<InventoryRow[]>([]);
   const [loadingChildrenByParent, setLoadingChildrenByParent] = useState<Record<string, boolean>>({});
-  const [detailRow, setDetailRow] = useState<InventoryRow | null>(null);
+  const [actionsMenu, setActionsMenu] = useState<RowActionsMenuState | null>(null);
+  const [ratingEditorRow, setRatingEditorRow] = useState<InventoryRow | null>(null);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string> | null>(null);
+  const actionsMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const emitSelectionFlight = useCallback((originRect: DOMRect, count: number) => {
+    if (count <= 0) return;
+
+    globalThis.dispatchEvent(
+      new CustomEvent(selectionFlightEventName, {
+        detail: {
+          originRect: {
+            left: originRect.left,
+            top: originRect.top,
+            width: originRect.width,
+            height: originRect.height,
+          },
+          count,
+        },
+      }),
+    );
+  }, []);
+
+  const getSelectionColumnOriginRect = useCallback(
+    (rowElement?: Element | null): DOMRect | null => {
+      if (!showSelectionColumn) return null;
+
+      const rowCell = rowElement?.querySelector("td.select-col");
+      if (rowCell instanceof HTMLElement) return rowCell.getBoundingClientRect();
+
+      const headerCell = parentRef.current?.querySelector("thead th.select-col");
+      if (headerCell instanceof HTMLElement) return headerCell.getBoundingClientRect();
+
+      const firstBodyCell = parentRef.current?.querySelector("tbody td.select-col");
+      if (firstBodyCell instanceof HTMLElement) return firstBodyCell.getBoundingClientRect();
+
+      return null;
+    },
+    [showSelectionColumn],
+  );
 
   const allRows = useMemo(() => {
     const unique = new Map<string, InventoryRow>();
@@ -144,7 +192,35 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
   }, [allRows, byParent]);
 
   const childIds = useMemo(() => new Set(allRows.filter((row) => row.parentId).map((row) => row.parentId)), [allRows]);
+  const rowsById = useMemo(() => new Map(allRows.map((row) => [row.id, row] as const)), [allRows]);
   const activeVisibleColumnIds = visibleColumnIds ?? new Set<string>();
+  const activeActionsRowId = actionsMenu?.rowId ?? null;
+  const actionsMenuRow = useMemo(
+    () => (actionsMenu ? allRows.find((row) => row.id === actionsMenu.rowId) ?? null : null),
+    [actionsMenu, allRows],
+  );
+
+  useEffect(() => {
+    if (!actionsMenu) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (actionsMenuRef.current?.contains(target)) return;
+      setActionsMenu(null);
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setActionsMenu(null);
+    };
+
+    globalThis.document.addEventListener("mousedown", handlePointerDown);
+    globalThis.document.addEventListener("keydown", handleEscape);
+    return () => {
+      globalThis.document.removeEventListener("mousedown", handlePointerDown);
+      globalThis.document.removeEventListener("keydown", handleEscape);
+    };
+  }, [actionsMenu]);
 
   const handleToggleExpand = useCallback(
     (row: InventoryRow) => {
@@ -192,7 +268,7 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
   );
 
   const columns = useMemo<ColumnDef<InventoryRow>[]>(() => {
-    return dataset.columns
+    const dataColumns: ColumnDef<InventoryRow>[] = dataset.columns
       .filter((column) => activeVisibleColumnIds.has(column.id))
       .map((column) => ({
         id: column.id,
@@ -234,7 +310,55 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
         },
         meta: { group: column.group, width: column.width, pinned: column.pinned },
       }));
-  }, [activeVisibleColumnIds, childIds, dataset.columns, expanded, handleToggleExpand, loadingChildrenByParent]);
+
+    const actionsColumn: ColumnDef<InventoryRow> = {
+      id: actionsColumnId,
+      header: "",
+      accessorFn: () => "",
+      enableSorting: false,
+      enableColumnFilter: false,
+      cell: ({ row }) => {
+        const isRatingEffectiveDateRow = tabId === "ratings" && row.original.nodeType === "rating-effective-date";
+        const isOpen = activeActionsRowId === row.original.id;
+        return (
+          <div className="row-actions" ref={isOpen ? actionsMenuRef : null}>
+            <GwButton
+              type="button"
+              variant="subtle"
+              className="row-actions-trigger"
+              disabled={!isRatingEffectiveDateRow}
+              aria-label={`Open actions for ${row.original.label}`}
+              aria-haspopup="menu"
+              aria-expanded={isOpen}
+              onClick={(event) => {
+                if (!isRatingEffectiveDateRow) return;
+                event.stopPropagation();
+                const triggerRect = event.currentTarget.getBoundingClientRect();
+                // Defer menu state update so the click handler returns quickly.
+                globalThis.requestAnimationFrame(() => {
+                  setActionsMenu((current) =>
+                    current?.rowId === row.original.id
+                      ? null
+                      : {
+                          rowId: row.original.id,
+                          label: row.original.label,
+                          x: triggerRect.right + 6,
+                          y: triggerRect.bottom + 4,
+                        },
+                  );
+                });
+              }}
+            >
+              <MoreHorizontal size={14} />
+            </GwButton>
+          </div>
+        );
+      },
+      meta: { group: "", width: 42 },
+    };
+
+    return [actionsColumn, ...dataColumns];
+  }, [activeActionsRowId, activeVisibleColumnIds, childIds, dataset.columns, expanded, handleToggleExpand, loadingChildrenByParent, tabId]);
 
   const table = useReactTable({
     data: rows,
@@ -260,25 +384,101 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
     ? rowVirtualizer.getTotalSize() - (virtualItems[virtualItems.length - 1]?.end ?? 0)
     : 0;
 
-  const selectedEntities = allRows
-    .filter((row) => selectedRows[row.id] && row.selectable !== false)
-    .filter((row) => (tabId === "time-series-groups" ? row.kind === "timeSeries" : true))
-    .map((row) => ({
-      id: row.id,
-      label: row.label,
-      kind: row.kind,
-      office: row.office,
-      units: typeof row.units === "string" ? row.units : undefined,
-      locationId:
-        typeof row.location === "string" && row.location.trim().length > 0
-          ? row.location
-          : row.kind === "location"
-            ? row.label
-            : undefined,
-      latitude: typeof row.latitude === "number" ? row.latitude : undefined,
-      longitude: typeof row.longitude === "number" ? row.longitude : undefined,
-      tabId,
-    }));
+  const toSelectedEntity = useCallback(
+    (row: InventoryRow): SelectedEntity | null => {
+      if (row.selectable === false) return null;
+      if (tabId === "time-series-groups") {
+        if (row.kind !== "timeSeries") return null;
+        const timeSeriesId =
+          typeof row.timeSeriesId === "string" && row.timeSeriesId.trim().length > 0
+            ? row.timeSeriesId
+            : row.label;
+        return {
+          id: timeSeriesId,
+          label: timeSeriesId,
+          kind: "timeSeries",
+          office: row.office,
+          units: typeof row.units === "string" ? row.units : undefined,
+          tabId,
+        };
+      }
+      if (tabId === "location-groups") {
+        if (row.nodeType !== "location-member") return null;
+        const locationId =
+          typeof row.location === "string" && row.location.trim().length > 0
+            ? row.location
+            : row.label;
+        return {
+          id: locationId,
+          label: locationId,
+          kind: "location",
+          office: row.office,
+          locationId,
+          latitude: typeof row.latitude === "number" ? row.latitude : undefined,
+          longitude: typeof row.longitude === "number" ? row.longitude : undefined,
+          tabId,
+        };
+      }
+
+      return {
+        id: row.id,
+        label: row.label,
+        kind: row.kind,
+        office: row.office,
+        units: typeof row.units === "string" ? row.units : undefined,
+        locationId:
+          typeof row.location === "string" && row.location.trim().length > 0
+            ? row.location
+            : row.kind === "location"
+              ? row.label
+              : undefined,
+        latitude: typeof row.latitude === "number" ? row.latitude : undefined,
+        longitude: typeof row.longitude === "number" ? row.longitude : undefined,
+        tabId,
+      };
+    },
+    [tabId],
+  );
+
+  const resolveEntitiesForRow = useCallback(
+    (row: InventoryRow): SelectedEntity[] => {
+      const sourceRows = tabId === "location-groups"
+        ? row.nodeType === "location-member"
+          ? [row]
+          : (descendantIdsByParent.get(row.id) ?? [])
+            .map((id) => rowsById.get(id))
+            .filter((candidate): candidate is InventoryRow => Boolean(candidate))
+            .filter((candidate) => candidate.nodeType === "location-member")
+        : tabId === "time-series-groups"
+          ? row.kind === "timeSeries"
+            ? [row]
+            : (descendantIdsByParent.get(row.id) ?? [])
+              .map((id) => rowsById.get(id))
+              .filter((candidate): candidate is InventoryRow => Boolean(candidate))
+              .filter((candidate) => candidate.kind === "timeSeries")
+          : [row];
+
+      const deduped = new Map<string, SelectedEntity>();
+      for (const sourceRow of sourceRows) {
+        const entity = toSelectedEntity(sourceRow);
+        if (!entity) continue;
+        deduped.set(`${entity.kind}-${entity.id}`, entity);
+      }
+      return [...deduped.values()];
+    },
+    [descendantIdsByParent, rowsById, tabId, toSelectedEntity],
+  );
+
+  const selectedEntities = useMemo(() => {
+    const deduped = new Map<string, SelectedEntity>();
+    for (const row of allRows) {
+      if (!selectedRows[row.id]) continue;
+      for (const entity of resolveEntitiesForRow(row)) {
+        deduped.set(`${entity.kind}-${entity.id}`, entity);
+      }
+    }
+    return [...deduped.values()];
+  }, [allRows, resolveEntitiesForRow, selectedRows]);
 
   const groupedHeaders = dataset.columns
     .filter((column) => activeVisibleColumnIds.has(column.id))
@@ -303,13 +503,17 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
             Clear Filters
           </GwButton>
           {showSelectionColumn && (
-            <GwButton type="button" onClick={() => onAddSelections(selectedEntities)} disabled={!selectedEntities.length}>
+            <GwButton
+              type="button"
+              onClick={(event) => {
+                onAddSelections(selectedEntities);
+                if (!selectedEntities.length) return;
+                const originRect = getSelectionColumnOriginRect() ?? event.currentTarget.getBoundingClientRect();
+                emitSelectionFlight(originRect, selectedEntities.length);
+              }}
+              disabled={!selectedEntities.length}
+            >
               Select
-            </GwButton>
-          )}
-          {showSelectionColumn && (
-            <GwButton type="button" onClick={() => setSelectedRows({})}>
-              De-select
             </GwButton>
           )}
           <GwButton type="button" onClick={onRetry}>
@@ -338,6 +542,7 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
           <table className="inventory-grid">
             <thead>
               <tr className="group-row">
+                <th aria-label="actions column" />
                 {showSelectionColumn && <th aria-label="select column" />}
                 {groupedHeaders.map((group, index) => (
                   <th key={`${group.group}-${index}`} colSpan={group.span}>{group.group}</th>
@@ -345,20 +550,28 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
               </tr>
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id}>
-                  {showSelectionColumn && <th className="select-col" />}
-                  {headerGroup.headers.map((header) => (
-                    <th key={header.id} style={{ minWidth: `${(header.column.columnDef.meta as { width?: number } | undefined)?.width ?? 120}px` }}>
-                      <GwButton type="button" variant="subtle" className="header-button" onClick={header.column.getToggleSortingHandler()}>
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                        <span>{header.column.getIsSorted() === "asc" ? "↑" : header.column.getIsSorted() === "desc" ? "↓" : ""}</span>
-                      </GwButton>
-                      <GwInput
-                        placeholder="Search"
-                        aria-label={`Search ${String(header.column.columnDef.header)}`}
-                        value={(header.column.getFilterValue() as string) ?? ""}
-                        onChange={(event) => header.column.setFilterValue(event.target.value)}
-                      />
-                    </th>
+                  {headerGroup.headers.map((header, index) => (
+                    <Fragment key={`header-${header.id}`}>
+                      <th key={header.id} style={{ minWidth: `${(header.column.columnDef.meta as { width?: number } | undefined)?.width ?? 120}px` }}>
+                        {header.column.id === actionsColumnId ? (
+                          <div className="actions-header-spacer" aria-hidden="true" />
+                        ) : (
+                          <>
+                            <GwButton type="button" variant="subtle" className="header-button" onClick={header.column.getToggleSortingHandler()}>
+                              {flexRender(header.column.columnDef.header, header.getContext())}
+                              <span>{header.column.getIsSorted() === "asc" ? "↑" : header.column.getIsSorted() === "desc" ? "↓" : ""}</span>
+                            </GwButton>
+                            <GwInput
+                              placeholder="Search"
+                              aria-label={`Search ${String(header.column.columnDef.header)}`}
+                              value={(header.column.getFilterValue() as string) ?? ""}
+                              onChange={(event) => header.column.setFilterValue(event.target.value)}
+                            />
+                          </>
+                        )}
+                      </th>
+                      {showSelectionColumn && index === 0 && <th className="select-col" />}
+                    </Fragment>
                   ))}
                 </tr>
               ))}
@@ -375,32 +588,44 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
                   <tr
                     key={row.original.id}
                     className={selectedRows[row.original.id] ? "selected-row" : ""}
-                    onDoubleClick={() => setDetailRow(row.original)}
                     style={{ height: `${virtualItem.size}px` }}
+                    onDoubleClick={(event) => {
+                      const target = event.target;
+                      if (!(target instanceof Element)) return;
+                      if (target.closest("button, input, label, [role='menu']")) return;
+
+                      const entities = resolveEntitiesForRow(row.original);
+                      if (!entities.length) return;
+                      onAddSelections(entities);
+                      const originRect = getSelectionColumnOriginRect(event.currentTarget) ?? event.currentTarget.getBoundingClientRect();
+                      emitSelectionFlight(originRect, entities.length);
+                    }}
                   >
-                    {showSelectionColumn && (
-                      <td className="select-col">
-                        <GwCheckbox
-                          id={`select-${row.original.id}`}
-                          compact
-                          checked={Boolean(selectedRows[row.original.id])}
-                          disabled={row.original.selectable === false}
-                          onChange={(event) =>
-                            setSelectedRows((current) => {
-                              const checked = event.target.checked;
-                              const next = { ...current };
-                              const idsToSet = [row.original.id, ...(descendantIdsByParent.get(row.original.id) ?? [])];
-                              for (const rowId of idsToSet) next[rowId] = checked;
-                              return next;
-                            })
-                          }
-                        />
-                      </td>
-                    )}
-                    {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} onClick={() => setDetailRow(row.original)}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
+                    {row.getVisibleCells().map((cell, index) => (
+                      <Fragment key={`cell-${cell.id}`}>
+                        <td className={cell.column.id === actionsColumnId ? "actions-cell" : undefined}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                        {showSelectionColumn && index === 0 && (
+                          <td className="select-col">
+                            <GwCheckbox
+                              id={`select-${row.original.id}`}
+                              compact
+                              checked={Boolean(selectedRows[row.original.id])}
+                              disabled={row.original.selectable === false}
+                              onChange={(event) =>
+                                setSelectedRows((current) => {
+                                  const checked = event.target.checked;
+                                  const next = { ...current };
+                                  const idsToSet = [row.original.id, ...(descendantIdsByParent.get(row.original.id) ?? [])];
+                                  for (const rowId of idsToSet) next[rowId] = checked;
+                                  return next;
+                                })
+                              }
+                            />
+                          </td>
+                        )}
+                      </Fragment>
                     ))}
                   </tr>
                 );
@@ -428,7 +653,30 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
           onDefaults={() => setVisibleColumnIds(new Set(dataset.columns.filter((column) => column.defaultVisible !== false).map((column) => column.id)))}
         />
       </div>
-      <DetailDrawer row={detailRow} onClose={() => setDetailRow(null)} />
+      {actionsMenu && (
+        <div
+          className="row-actions-menu"
+          ref={actionsMenuRef}
+          role="menu"
+          aria-label={`Actions for ${actionsMenu.label}`}
+          style={{ left: `${actionsMenu.x}px`, top: `${actionsMenu.y}px` }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="row-actions-item"
+            disabled={!(tabId === "ratings" && actionsMenuRow?.nodeType === "rating-effective-date")}
+            onClick={() => {
+              if (!(tabId === "ratings" && actionsMenuRow?.nodeType === "rating-effective-date")) return;
+              setRatingEditorRow(actionsMenuRow);
+              setActionsMenu(null);
+            }}
+          >
+            Edit Effective Date
+          </button>
+        </div>
+      )}
+      <RatingEffectiveDateEditor open={Boolean(ratingEditorRow)} row={ratingEditorRow} onClose={() => setRatingEditorRow(null)} />
     </section>
   );
 }

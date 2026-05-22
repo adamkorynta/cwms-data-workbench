@@ -39,6 +39,8 @@ export interface AppSettings {
   timezone: string;
   unitSystem: "English" | "SI";
   timeWindow: TimeWindow;
+  authStatus?: string;
+  authDetail?: string;
 }
 
 export interface CdaDataSource {

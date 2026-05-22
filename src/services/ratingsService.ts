@@ -1,4 +1,4 @@
-import { getCdaConfig, createCwmsApi } from "../api/cdaClient";
+import { getCdaConfig, createCwmsApi, cdaFetch } from "../api/cdaClient";
 import { ratingsDataset } from "../data/mockData";
 import type { InventoryDataset, InventoryRow } from "../types";
 import { enrichTimeSeriesRowWithLocationMetadata, fetchLocationMetadataById } from "./locationMetadataService";
@@ -55,6 +55,67 @@ interface RatingSpecsLike {
 	total?: number;
 }
 
+interface RatingPointLike {
+	ind?: string | number;
+	dep?: string | number;
+	["ind"]?: string | number;
+	["dep"]?: string | number;
+}
+
+interface RatingPointsGroupLike {
+	otherInd?: {
+		position?: string | number;
+		value?: string | number;
+	};
+	point?: RatingPointLike[];
+	["other-ind"]?: {
+		position?: string | number;
+		value?: string | number;
+	};
+}
+
+interface SimpleRatingLike {
+	officeId?: string;
+	ratingSpecId?: string;
+	unitsId?: string;
+	effectiveDate?: string;
+	createDate?: string;
+	active?: boolean | string;
+	description?: string;
+	ratingPoints?: RatingPointsGroupLike[];
+	["office-id"]?: string;
+	["rating-spec-id"]?: string;
+	["units-id"]?: string;
+	["effective-date"]?: string;
+	["create-date"]?: string;
+	["rating-points"]?: RatingPointsGroupLike[];
+}
+
+interface RetrievedRatingsLike {
+	simpleRating?: SimpleRatingLike[];
+	["simple-rating"]?: SimpleRatingLike[];
+}
+
+export interface RatingEffectiveDatePoint {
+	index: number;
+	otherIndependentPosition: string;
+	otherIndependentValue: string;
+	independentValue: string;
+	dependentValue: string;
+}
+
+export interface RatingEffectiveDateEditorData {
+	officeId: string;
+	ratingSpecId: string;
+	unitsId: string;
+	effectiveDate: string;
+	createDate: string;
+	active: boolean;
+	description: string;
+	points: RatingEffectiveDatePoint[];
+	raw: unknown;
+}
+
 const ROOT_TEMPLATES_ID = "ratings-root:templates";
 const ROOT_SPECS_ID = "ratings-root:specs";
 
@@ -75,6 +136,190 @@ function formatEffectiveDate(value: Date | string): string {
 	if (Number.isNaN(parsed.valueOf())) return String(value);
 	const iso = parsed.toISOString();
 	return iso.replace("T", " ").replace(".000Z", "");
+}
+
+function toIsoDateTime(value: Date | string): string | undefined {
+	const parsed = value instanceof Date ? value : new Date(value);
+	if (Number.isNaN(parsed.valueOf())) return undefined;
+	return parsed.toISOString();
+}
+
+function normalizeDateKey(value: string | undefined): string {
+	if (!value) return "";
+	const parsed = new Date(value);
+	if (Number.isNaN(parsed.valueOf())) return value.trim();
+	return parsed.toISOString();
+}
+
+function asString(value: unknown): string {
+	if (value === undefined || value === null) return "";
+	return String(value);
+}
+
+function asBoolean(value: unknown): boolean {
+	if (typeof value === "boolean") return value;
+	if (typeof value === "string") return value.toLowerCase() === "true";
+	return Boolean(value);
+}
+
+function getElementLocalName(element: Element): string {
+	return element.localName || element.tagName;
+}
+
+function getDirectChildrenByName(parent: Element, name: string): Element[] {
+	const children = Array.from(parent.children);
+	return children.filter((child) => getElementLocalName(child) === name);
+}
+
+function getFirstDirectChild(parent: Element, name: string): Element | undefined {
+	return getDirectChildrenByName(parent, name)[0];
+}
+
+function getFirstDirectChildText(parent: Element, name: string): string | undefined {
+	const child = getFirstDirectChild(parent, name);
+	const value = child?.textContent?.trim();
+	return value ? value : undefined;
+}
+
+function parseXmlSimpleRatings(xmlText: string): SimpleRatingLike[] {
+	if (!xmlText.trim().startsWith("<")) return [];
+
+	const document = new DOMParser().parseFromString(xmlText, "application/xml");
+	if (document.getElementsByTagName("parsererror").length > 0) return [];
+
+	const allElements = Array.from(document.getElementsByTagName("*"));
+	const simpleRatingElements = allElements.filter((element) => getElementLocalName(element) === "simple-rating");
+
+	return simpleRatingElements.map((simpleRatingElement) => {
+		const ratingPointsGroups: RatingPointsGroupLike[] = [];
+		for (const ratingPointsElement of getDirectChildrenByName(simpleRatingElement, "rating-points")) {
+			const otherIndElement = getFirstDirectChild(ratingPointsElement, "other-ind");
+			const otherInd = otherIndElement
+				? {
+					position: otherIndElement.getAttribute("position") ?? undefined,
+					value: getFirstDirectChildText(otherIndElement, "value") ?? otherIndElement.getAttribute("value") ?? undefined,
+				}
+				: undefined;
+
+			const points = getDirectChildrenByName(ratingPointsElement, "point").map((pointElement) => ({
+				ind: getFirstDirectChildText(pointElement, "ind") ?? "",
+				dep: getFirstDirectChildText(pointElement, "dep") ?? "",
+			}));
+
+			if (points.length > 0) {
+				ratingPointsGroups.push({
+					otherInd,
+					point: points,
+				});
+			}
+		}
+
+		return {
+			["office-id"]: simpleRatingElement.getAttribute("office-id") ?? undefined,
+			["rating-spec-id"]: getFirstDirectChildText(simpleRatingElement, "rating-spec-id"),
+			["units-id"]: getFirstDirectChildText(simpleRatingElement, "units-id"),
+			["effective-date"]: getFirstDirectChildText(simpleRatingElement, "effective-date"),
+			["create-date"]: getFirstDirectChildText(simpleRatingElement, "create-date"),
+			active: getFirstDirectChildText(simpleRatingElement, "active"),
+			description: getFirstDirectChildText(simpleRatingElement, "description"),
+			["rating-points"]: ratingPointsGroups,
+		};
+	});
+}
+
+function pickSimpleRatings(response: unknown): SimpleRatingLike[] {
+	if (typeof response === "string") {
+		return parseXmlSimpleRatings(response);
+	}
+
+	if (response instanceof Document) {
+		const serialized = new XMLSerializer().serializeToString(response);
+		return parseXmlSimpleRatings(serialized);
+	}
+
+	if (!response || typeof response !== "object") return [];
+	const container = response as RetrievedRatingsLike;
+	if (Array.isArray(container.simpleRating)) return container.simpleRating;
+	if (Array.isArray(container["simple-rating"])) return container["simple-rating"];
+	return [];
+}
+
+function flattenRatingPoints(pointsGroups: RatingPointsGroupLike[] | undefined): RatingEffectiveDatePoint[] {
+	if (!pointsGroups?.length) return [];
+	const flattened: RatingEffectiveDatePoint[] = [];
+	let pointIndex = 1;
+
+	for (const group of pointsGroups) {
+		const otherInd = group.otherInd ?? group["other-ind"];
+		const otherIndependentPosition = asString(otherInd?.position);
+		const otherIndependentValue = asString(otherInd?.value);
+		for (const point of group.point ?? []) {
+			flattened.push({
+				index: pointIndex,
+				otherIndependentPosition,
+				otherIndependentValue,
+				independentValue: asString(point.ind),
+				dependentValue: asString(point.dep),
+			});
+			pointIndex += 1;
+		}
+	}
+
+	return flattened;
+}
+
+async function retrieveRatingsPayload(
+	ratingId: string,
+	office?: string,
+	effectiveDate?: string,
+) {
+	const normalizedRatingId = ratingId.trim();
+	if (!normalizedRatingId) {
+		throw new Error("Rating identifier is required to retrieve effective-date data.");
+	}
+
+	const normalizedOffice = office?.trim();
+	if (!normalizedOffice) {
+		throw new Error("Office is required to retrieve rating effective-date data.");
+	}
+
+	const payload = await retrieveRatingsPayloadViaHttp(normalizedRatingId, normalizedOffice, effectiveDate);
+	if (payload === undefined) throw new Error("No rating payload returned from CDA.");
+	return payload;
+}
+
+async function retrieveRatingsPayloadViaHttp(
+	ratingId: string,
+	office?: string,
+	effectiveDate?: string,
+): Promise<unknown | undefined> {
+	const { baseUrl } = getCdaConfig();
+	if (!office) return undefined;
+
+	const endpoint = new URL(`ratings/${encodeURIComponent(ratingId)}`, `${baseUrl.replace(/\/$/, "")}/`);
+	endpoint.searchParams.set("office", office);
+	if (effectiveDate) {
+		endpoint.searchParams.set("begin", effectiveDate);
+		endpoint.searchParams.set("end", effectiveDate);
+	}
+
+	const response = await cdaFetch(endpoint.toString());
+	if (!response.ok) {
+		throw new Error(`Rating query failed (${response.status} ${response.statusText}).`);
+	}
+
+	const text = await response.text();
+	if (!text.trim()) return undefined;
+
+	const trimmed = text.trim();
+	if (trimmed.startsWith("<")) return trimmed;
+	try {
+		return JSON.parse(trimmed);
+	} catch {
+		return trimmed;
+	}
+
+	return undefined;
 }
 
 function mapIndependentParameterColumns(
@@ -214,6 +459,7 @@ function mapSpecRows(
 			const effectiveDateRows: InventoryRow[] = (spec.effectiveDates ?? [])
 				.map((effectiveDate) => {
 					const display = formatEffectiveDate(effectiveDate);
+					const iso = toIsoDateTime(effectiveDate);
 					return {
 						id: `rating-effective:${specRow.id}:${display}`,
 						parentId: specRow.id,
@@ -226,6 +472,7 @@ function mapSpecRows(
 						location: specRow.location,
 						independent: specRow.independent,
 						dependent: specRow.dependent,
+						effectiveDate: iso ?? asString(effectiveDate),
 						selectable: false,
 						nodeType: "rating-effective-date",
 					};
@@ -289,5 +536,40 @@ export async function fetchRatingsInventory(): Promise<InventoryDataset> {
 			exhausted: true,
 			partial: false,
 		},
+	};
+}
+
+export async function fetchRatingEffectiveDateEditorData(
+	ratingId: string,
+	effectiveDate: string,
+	officeOverride?: string,
+): Promise<RatingEffectiveDateEditorData> {
+	const normalizedRatingId = ratingId.trim();
+	if (!normalizedRatingId) {
+		throw new Error("Rating identifier is missing for this effective-date row.");
+	}
+
+	const { office } = getCdaConfig();
+	const payload = await retrieveRatingsPayload(normalizedRatingId, officeOverride ?? office, effectiveDate);
+	const simpleRatings = pickSimpleRatings(payload);
+	const effectiveDateKey = normalizeDateKey(effectiveDate);
+	const matching =
+		simpleRatings.find((candidate) => normalizeDateKey(candidate.effectiveDate ?? candidate["effective-date"]) === effectiveDateKey) ??
+		simpleRatings[0];
+
+	if (!matching) {
+		throw new Error("No rating payload returned for this effective date.");
+	}
+
+	return {
+		officeId: asString(matching.officeId ?? matching["office-id"]),
+		ratingSpecId: asString(matching.ratingSpecId ?? matching["rating-spec-id"] ?? normalizedRatingId),
+		unitsId: asString(matching.unitsId ?? matching["units-id"]),
+		effectiveDate: asString(matching.effectiveDate ?? matching["effective-date"] ?? effectiveDate),
+		createDate: asString(matching.createDate ?? matching["create-date"]),
+		active: asBoolean(matching.active),
+		description: asString(matching.description),
+		points: flattenRatingPoints(matching.ratingPoints ?? matching["rating-points"]),
+		raw: payload,
 	};
 }

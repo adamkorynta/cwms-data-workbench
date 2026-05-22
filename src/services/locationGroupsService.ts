@@ -159,7 +159,8 @@ export async function fetchLocationGroupsInventory(): Promise<InventoryDataset> 
 			office: categoryOffice,
 			description: category.description,
 			depth: 0,
-			selectable: false,
+			nodeType: "location-category",
+			selectable: true,
 		});
 
 		try {
@@ -197,7 +198,8 @@ export async function fetchLocationGroupsInventory(): Promise<InventoryDataset> 
 					alias: group.sharedLocAliasId,
 					attribute: group.locGroupAttribute,
 					depth: 1,
-					selectable: false,
+					nodeType: "location-group",
+					selectable: true,
 				});
 
 				const assigned = [...(group.assignedLocations ?? [])]
@@ -215,12 +217,14 @@ export async function fetchLocationGroupsInventory(): Promise<InventoryDataset> 
 						kind: "locationGroup",
 						label: locationId,
 						name: locationId,
+						location: locationId,
 						office: member.officeId ?? groupOffice,
 						alias: member.aliasId,
 						attribute: member.attribute,
 						referenceLocation: member.refLocationId,
 						depth: 2,
-						selectable: false,
+						nodeType: "location-member",
+						selectable: true,
 					});
 				}
 			}

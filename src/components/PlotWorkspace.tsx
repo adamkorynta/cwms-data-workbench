@@ -1,11 +1,11 @@
 import { X } from "lucide-react";
 import PlotImport from "react-plotly.js";
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fetchPlotData, fetchPlotSeriesData, type PlotSeriesData } from "../services/inventoryServices";
 import { fetchLocationMetadataById } from "../services/locationMetadataService";
 import { GwCheckbox, GwInput } from "./GroundworkControls";
-import { GeoSelectionMap } from "./GeoSelectionMap";
+import { GeoSelectionMap, getKindStyle } from "./GeoSelectionMap";
 import type { PlotPoint, SelectedEntity, TimeWindow } from "../types";
 
 const PlotComponent = (() => {
@@ -175,13 +175,15 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
 
   const [data, setData] = useState<PlotPoint[]>([]);
   const [seriesData, setSeriesData] = useState<PlotSeriesData[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [seriesLoading, setSeriesLoading] = useState(false);
+  const [seriesError, setSeriesError] = useState<string | null>(null);
+  const [locationLoading, setLocationLoading] = useState(false);
   const [mode, setMode] = useState<"chart" | "table" | "map">(initialMode);
   const [precision, setPrecision] = useState(2);
   const [showQualityValues, setShowQualityValues] = useState(false);
   const [locationCoordinates, setLocationCoordinates] = useState<Map<string, { latitude?: number; longitude?: number; locationKind?: string }>>(new Map());
   const [selectedMapLocationId, setSelectedMapLocationId] = useState<string | null>(null);
+  const [loadingSeriesNames, setLoadingSeriesNames] = useState<Set<string>>(new Set());
   const tableContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -199,6 +201,7 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
   useEffect(() => {
     if (!open) return;
     let active = true;
+    setLocationLoading(true);
 
     fetchLocationMetadataById()
       .then((metadataById) => {
@@ -215,6 +218,9 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
       })
       .catch(() => {
         if (active) setLocationCoordinates(new Map());
+      })
+      .finally(() => {
+        if (active) setLocationLoading(false);
       });
 
     return () => {
@@ -317,6 +323,54 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
     return sparklines;
   }, [mapPoints, seriesData]);
 
+  const loadedSeriesNames = useMemo(() => new Set(seriesData.map((series) => series.seriesName)), [seriesData]);
+
+  const ensureSeriesLoaded = useCallback(
+    (seriesNames: string[]) => {
+      if (!open || seriesNames.length === 0) return;
+
+      const uniqueNames = Array.from(new Set(seriesNames.filter((name) => name.trim().length > 0)));
+      const namesToLoad = uniqueNames.filter((name) => !loadedSeriesNames.has(name) && !loadingSeriesNames.has(name));
+      if (!namesToLoad.length) return;
+
+      setLoadingSeriesNames((current) => {
+        const next = new Set(current);
+        for (const name of namesToLoad) next.add(name);
+        return next;
+      });
+
+      fetchPlotSeriesData(namesToLoad, timeWindow)
+        .then((incomingSeries) => {
+          setSeriesData((current) => {
+            const byName = new Map(current.map((series) => [series.seriesName, series]));
+            for (const series of incomingSeries) byName.set(series.seriesName, series);
+            return [...byName.values()];
+          });
+        })
+        .catch(() => {
+          // Ignore location-level hydration failures to avoid blocking map usage.
+        })
+        .finally(() => {
+          setLoadingSeriesNames((current) => {
+            const next = new Set(current);
+            for (const name of namesToLoad) next.delete(name);
+            return next;
+          });
+        });
+    },
+    [loadedSeriesNames, loadingSeriesNames, open, timeWindow],
+  );
+
+  const handleSelectMapLocation = useCallback(
+    (locationId: string) => {
+      setSelectedMapLocationId(locationId);
+      const point = mapPoints.find((candidate) => candidate.locationId === locationId);
+      if (!point) return;
+      ensureSeriesLoaded(point.series.map((series) => series.label));
+    },
+    [ensureSeriesLoaded, mapPoints],
+  );
+
   const hasMapEligibleSelection = useMemo(
     () => selections.some((selection) => selection.kind === "location" || selection.kind === "timeSeries"),
     [selections],
@@ -325,6 +379,18 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
   const mapRenderPoints = useMemo(
     () =>
       mapPoints.map((point) => {
+        const seriesSparklines = point.series.map((series) => {
+          const points = seriesData.find((candidate) => candidate.seriesName === series.label)?.points ?? [];
+          const values = points
+            .map((candidate) => candidate.value)
+            .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+          return {
+            seriesId: series.label,
+            values: values.slice(-32),
+          };
+        });
+
         const sparklineValues = point.series.flatMap((series) => {
           const points = seriesData.find((candidate) => candidate.seriesName === series.label)?.points ?? [];
           return points
@@ -340,11 +406,19 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
           locationSelected: point.locationSelected,
           seriesCount: point.series.length,
           seriesIds: point.series.map((series) => series.label),
+          seriesSparklines,
           sparklineValues: sparklineValues.slice(-32),
           sparklineLabel: sparklineByLocation.get(point.locationId) ?? "No data",
         };
       }),
     [mapPoints, seriesData, sparklineByLocation],
+  );
+
+  const isLocationSparklineLoading = useCallback(
+    (point: { seriesIds: string[] }) =>
+      point.seriesIds.length > 0 &&
+      point.seriesIds.some((seriesName) => !loadedSeriesNames.has(seriesName) || loadingSeriesNames.has(seriesName)),
+    [loadedSeriesNames, loadingSeriesNames],
   );
 
   const timezoneId = useMemo(() => extractTimeZoneId(timezone), [timezone]);
@@ -387,24 +461,42 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
     : 0;
 
   useEffect(() => {
-    if (!open || !parameterGroups.length) return;
-    setLoading(true);
-    setError(null);
+    if (!open) return;
+    if (!parameterGroups.length) {
+      setSeriesLoading(false);
+      setSeriesError(null);
+      setData([]);
+      setSeriesData([]);
+      return;
+    }
+
+    let active = true;
+    setSeriesLoading(true);
+    setSeriesError(null);
     const allSeriesNames = parameterGroups.flatMap((group) => group.series.map((s) => s.label));
+
     Promise.all([
       fetchPlotData(allSeriesNames, timeWindow),
       fetchPlotSeriesData(allSeriesNames, timeWindow),
     ])
       .then(([tableRows, plotSeries]) => {
+        if (!active) return;
         setData(tableRows);
         setSeriesData(plotSeries);
       })
       .catch((caught: unknown) => {
+        if (!active) return;
         setData([]);
         setSeriesData([]);
-        setError(caught instanceof Error ? caught.message : "Unable to load plot data.");
+        setSeriesError(caught instanceof Error ? caught.message : "Unable to load plot data.");
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (active) setSeriesLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, [open, parameterGroups, timeWindow]);
 
   if (!open) return null;
@@ -452,44 +544,48 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
             </div>
           )}
         </div>
-        {loading ? (
-          <div className="state-overlay">Loading time series data...</div>
-        ) : error ? (
-          <div className="state-overlay error">
-            <strong>Unable to load plot data.</strong>
-            <span>{error}</span>
-          </div>
-        ) : mode === "map" ? (
+        {mode === "map" ? (
           !hasMapEligibleSelection ? (
             <div className="state-overlay">Select locations or time series to open a map.</div>
+          ) : locationLoading && !mapPoints.length ? (
+            <div className="state-overlay">Loading mapped coordinates...</div>
           ) : !mapPoints.length ? (
             <div className="state-overlay">No mapped coordinates available in the current selection.</div>
           ) : (
             <div className="map-panel">
               <div className="map-plot-wrap">
-                <GeoSelectionMap points={mapRenderPoints} selectedLocationId={selectedMapLocationId} />
+                <GeoSelectionMap points={mapRenderPoints} selectedLocationId={selectedMapLocationId} onSelectLocation={handleSelectMapLocation} />
               </div>
               <section className="map-summary" aria-label="Map series summary">
                 <strong>Series Summary</strong>
+                {seriesLoading && <span className="map-background-load-note">Loading time series in background...</span>}
                 <div className="map-summary-grid">
-                  {mapRenderPoints.map((point) => (
+                  {mapRenderPoints.map((point) => {
+                    const kindStyle = getKindStyle(point.locationKind);
+                    const sparklineLoading = isLocationSparklineLoading(point);
+
+                    return (
                     <article
                       key={point.locationId}
                       className={selectedMapLocationId === point.locationId ? "map-summary-card active" : "map-summary-card"}
                       role="button"
                       tabIndex={0}
-                      onClick={() => setSelectedMapLocationId(point.locationId)}
+                      onClick={() => handleSelectMapLocation(point.locationId)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          setSelectedMapLocationId(point.locationId);
+                          handleSelectMapLocation(point.locationId);
                         }
                       }}
                     >
-                      <div>
-                        <span>{point.locationId}</span>
+                      <div className="map-summary-header">
+                        <span className="map-summary-location">
+                          <span className="map-summary-kind-icon" style={{ color: kindStyle.color }} aria-hidden="true">{kindStyle.glyph}</span>
+                          <span>{point.locationId}</span>
+                        </span>
                         <small>{point.seriesCount} time series</small>
                       </div>
+                      {sparklineLoading && <small className="map-sparkline-note">Loading sparkline data...</small>}
                       {point.seriesIds.length > 0 && (
                         <ul className="map-summary-id-list" aria-label={`Series ids for ${point.locationId}`}>
                           {point.seriesIds.map((seriesId) => (
@@ -498,11 +594,19 @@ export function PlotWorkspace({ open, initialMode = "chart", selections, timeWin
                         </ul>
                       )}
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             </div>
           )
+        ) : seriesLoading ? (
+          <div className="state-overlay">Loading time series data...</div>
+        ) : seriesError ? (
+          <div className="state-overlay error">
+            <strong>Unable to load plot data.</strong>
+            <span>{seriesError}</span>
+          </div>
         ) : !parameterGroups.length ? (
           <div className="state-overlay">No time series selected for plotting.</div>
         ) : mode === "chart" ? (

@@ -10,6 +10,7 @@ export interface GeoMapPoint {
   locationSelected: boolean;
   seriesCount: number;
   seriesIds: string[];
+  seriesSparklines: Array<{ seriesId: string; values: number[] }>;
   sparklineValues: number[];
   sparklineLabel: string;
 }
@@ -40,12 +41,12 @@ const KIND_STYLES: Record<string, KindStyle> = {
 
 const DEFAULT_KIND_STYLE: KindStyle = { glyph: "📌", color: "#64748b" };
 
-function normalizeLocationKind(kind: string | undefined): string {
+export function normalizeLocationKind(kind: string | undefined): string {
   if (!kind) return "";
   return kind.trim().toUpperCase().replace(/-/g, "_");
 }
 
-function getKindStyle(kind: string | undefined): KindStyle {
+export function getKindStyle(kind: string | undefined): KindStyle {
   const normalized = normalizeLocationKind(kind);
   return KIND_STYLES[normalized] ?? DEFAULT_KIND_STYLE;
 }
@@ -53,6 +54,7 @@ function getKindStyle(kind: string | undefined): KindStyle {
 interface GeoSelectionMapProps {
   points: GeoMapPoint[];
   selectedLocationId?: string | null;
+  onSelectLocation?: (locationId: string) => void;
 }
 
 function FitBounds({ points }: { points: GeoMapPoint[] }) {
@@ -123,7 +125,7 @@ function FocusSelectedLocation({
   return null;
 }
 
-export function GeoSelectionMap({ points, selectedLocationId }: GeoSelectionMapProps) {
+export function GeoSelectionMap({ points, selectedLocationId, onSelectLocation }: GeoSelectionMapProps) {
   const defaultCenter: LatLngExpression = [39.5, -98.35];
   const markerRefs = useRef<Map<string, LeafletMarker>>(new Map());
 
@@ -163,20 +165,33 @@ export function GeoSelectionMap({ points, selectedLocationId }: GeoSelectionMapP
             iconAnchor: [13, 36],
             popupAnchor: [0, -30],
           })}
+          eventHandlers={{
+            click: () => {
+              onSelectLocation?.(point.locationId);
+            },
+          }}
         >
-          <Popup minWidth={360} maxWidth={860}>
+          <Popup minWidth={220} maxWidth={460}>
             <div className="map-popup">
               <strong>{point.locationId}</strong>
               <span>Kind: {normalizeLocationKind(point.locationKind) || "UNKNOWN"}</span>
               <span>{point.seriesCount} time series</span>
-              {point.seriesIds.length > 0 && (
+              {point.seriesSparklines.length > 0 ? (
+                <ul className="map-popup-series-list" aria-label="Time series at location">
+                  {point.seriesSparklines.map((series) => (
+                    <li key={series.seriesId} className="map-popup-series-item">
+                      <span className="map-popup-series-id" title={series.seriesId}>{series.seriesId}</span>
+                      <SparklineSvg values={series.values} />
+                    </li>
+                  ))}
+                </ul>
+              ) : point.seriesIds.length > 0 ? (
                 <ul className="map-popup-series-list" aria-label="Time series at location">
                   {point.seriesIds.map((seriesId) => (
                     <li key={seriesId}>{seriesId}</li>
                   ))}
                 </ul>
-              )}
-              <SparklineSvg values={point.sparklineValues} />
+              ) : null}
             </div>
           </Popup>
         </Marker>

@@ -1,8 +1,9 @@
 import { normalizeBaseUrl } from "../config/dataSources";
+import { cdaFetch } from "../api/cdaClient";
 import type { CdaOffice } from "../types";
 
 export async function fetchOffices(baseUrl: string, signal?: AbortSignal): Promise<CdaOffice[]> {
-  const response = await fetch(`${normalizeBaseUrl(baseUrl)}offices`, {
+  const response = await cdaFetch(`${normalizeBaseUrl(baseUrl)}offices`, {
     headers: { Accept: "application/json" },
     signal,
   });

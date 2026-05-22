@@ -2,6 +2,16 @@ declare module "@usace/groundwork" {
   import type { ComponentType, HTMLAttributes, InputHTMLAttributes, ButtonHTMLAttributes, ReactNode } from "react";
 
   export const Button: ComponentType<ButtonHTMLAttributes<HTMLButtonElement>>;
+  export const LoginButton: ComponentType<{
+    onClick?: () => void;
+  }>;
+  export const ProfileDropdown: ComponentType<{
+    email?: string;
+    username?: string;
+    showLogout?: boolean;
+    onLogout?: () => void;
+    links?: Array<{ id: string; text: string; link: string }>;
+  }>;
   export const Checkboxes: ComponentType<{
     legend?: string;
     className?: string;

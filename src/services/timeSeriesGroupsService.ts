@@ -267,6 +267,8 @@ export async function fetchTimeSeriesGroupsInventory(): Promise<InventoryDataset
 			office: categoryOffice,
 			description: category.description,
 			depth: 0,
+			nodeType: "time-series-category",
+			selectable: true,
 		});
 
 		try {
@@ -302,6 +304,8 @@ export async function fetchTimeSeriesGroupsInventory(): Promise<InventoryDataset
 					description: group.description,
 					referenceTimeSeries: group.sharedRefTsId,
 					depth: 1,
+					nodeType: "time-series-group",
+					selectable: true,
 				});
 
 				const assigned = [...(group.assignedTimeSeries ?? [])]
@@ -319,11 +323,14 @@ export async function fetchTimeSeriesGroupsInventory(): Promise<InventoryDataset
 						kind: "timeSeries",
 						label: timeseriesId,
 						name: timeseriesId,
+						timeSeriesId: timeseriesId,
 						office: member.officeId ?? groupOffice,
 						referenceTimeSeries: member.refTsId,
 						alias: member.aliasId,
 						attribute: member.attribute,
 						depth: 2,
+						nodeType: "time-series-member",
+						selectable: true,
 					});
 				}
 			}

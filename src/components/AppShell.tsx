@@ -1,4 +1,4 @@
-import { SiteWrapper } from "@usace/groundwork";
+import { LoginButton, ProfileDropdown, SiteWrapper } from "@usace/groundwork";
 import { Database, User } from "lucide-react";
 import { dataSources } from "../config/dataSources";
 import type { AppSettings, CdaOffice } from "../types";
@@ -10,6 +10,8 @@ interface AppShellProps {
   officesError: string | null;
   onDataSourceChange: (baseUrl: string) => void;
   onOfficeChange: (office: string) => void;
+  onLogin: () => void;
+  onLogout: () => void;
   children: React.ReactNode;
 }
 
@@ -20,8 +22,12 @@ export function AppShell({
   officesError,
   onDataSourceChange,
   onOfficeChange,
+  onLogin,
+  onLogout,
   children,
-}: AppShellProps) {
+}: Readonly<AppShellProps>) {
+  const isSignedIn = settings.user !== "Not signed in";
+
   return (
     <SiteWrapper
       title="CWMS Data Workbench"
@@ -31,7 +37,7 @@ export function AppShell({
       showFooter={false}
       usaBanner={false}
       cwbiLogo
-      navRight={<HeaderControls user={settings.user} />}
+      navRight={<HeaderControls user={settings.user} signedIn={isSignedIn} onLogin={onLogin} onLogout={onLogout} />}
     >
       <div className="app-shell">
         <header className="app-header">
@@ -59,6 +65,7 @@ export function AppShell({
               </select>
             </label>
             {officesError && <span className="status-warning" title={officesError}>Offices unavailable</span>}
+            {settings.authStatus && <span className="status-warning" title={settings.authDetail ?? settings.authStatus}>{settings.authStatus}</span>}
           </div>
         </header>
         {children}
@@ -67,25 +74,50 @@ export function AppShell({
   );
 }
 
-function HeaderControls({ user }: { user: string }) {
+type HeaderControlsProps = {
+  user: string;
+  signedIn: boolean;
+  onLogin: () => void;
+  onLogout: () => void;
+};
+
+function HeaderControls({
+  user,
+  signedIn,
+  onLogin,
+  onLogout,
+}: Readonly<HeaderControlsProps>) {
   return (
     <div className="groundwork-nav-status">
+      {signedIn ? (
+        <ProfileDropdown
+          email={user.includes("@") ? user : undefined}
+          username={user}
+          showLogout
+          onLogout={onLogout}
+          links={[]}
+        />
+      ) : (
+        <LoginButton onClick={onLogin} />
+      )}
       <StatusItem icon={<User size={15} />} label="User" value={user} />
     </div>
   );
 }
+
+type StatusItemProps = {
+  icon?: React.ReactNode;
+  label: string;
+  value: string;
+  wide?: boolean;
+};
 
 function StatusItem({
   icon,
   label,
   value,
   wide = false,
-}: {
-  icon?: React.ReactNode;
-  label: string;
-  value: string;
-  wide?: boolean;
-}) {
+}: Readonly<StatusItemProps>) {
   return (
     <div className={wide ? "status-item status-item-wide" : "status-item"}>
       {icon}

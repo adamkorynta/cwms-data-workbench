@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" role="img" aria-label=".gov">
+  <rect width="50" height="50" rx="6" fill="#004B87" />
+  <circle cx="14" cy="25" r="4" fill="#FFFFFF" />
+  <text x="22" y="30" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">gov</text>
+</svg>

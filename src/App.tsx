@@ -1,5 +1,5 @@
 import { Plus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import {
   configureCdaClient,
   extractCdaAccessTokenFromUrl,
@@ -13,10 +13,8 @@ import { AppShell } from "./components/AppShell";
 import { FooterStatus } from "./components/FooterStatus";
 import { GwButton } from "./components/GroundworkControls";
 import { InventoryGrid } from "./components/InventoryGrid";
-import { PlotWorkspace } from "./components/PlotWorkspace";
 import { SelectionTray } from "./components/SelectionTray";
 import { Tabs, type TabDefinition } from "./components/Tabs";
-import { TimeSeriesEditor } from "./components/TimeSeriesEditor";
 import { TimeWindowDialog } from "./components/TimeWindowDialog";
 import { normalizeBaseUrl } from "./config/dataSources";
 import { useInventory } from "./hooks/useInventory";
@@ -61,6 +59,16 @@ const loaders: Record<TabId, () => Promise<InventoryDataset>> = {
 };
 
 const userProfileTimeoutMs = 15000;
+
+const PlotWorkspace = lazy(async () => {
+  const module = await import("./components/PlotWorkspace");
+  return { default: module.PlotWorkspace };
+});
+
+const TimeSeriesEditor = lazy(async () => {
+  const module = await import("./components/TimeSeriesEditor");
+  return { default: module.TimeSeriesEditor };
+});
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>("time-series");
@@ -416,15 +424,23 @@ export function App() {
         onChange={(timeWindow) => setSettings((current) => ({ ...current, timeWindow }))}
         onClose={() => setTimeWindowOpen(false)}
       />
-      <PlotWorkspace
-        open={plotOpen}
-        initialMode={plotInitialMode}
-        selections={selections}
-        timeWindow={settings.timeWindow}
-        timezone={settings.timezone}
-        onClose={() => setPlotOpen(false)}
-      />
-      <TimeSeriesEditor open={editorOpen} onClose={() => setEditorOpen(false)} />
+      {plotOpen ? (
+        <Suspense fallback={null}>
+          <PlotWorkspace
+            open={plotOpen}
+            initialMode={plotInitialMode}
+            selections={selections}
+            timeWindow={settings.timeWindow}
+            timezone={settings.timezone}
+            onClose={() => setPlotOpen(false)}
+          />
+        </Suspense>
+      ) : null}
+      {editorOpen ? (
+        <Suspense fallback={null}>
+          <TimeSeriesEditor open={editorOpen} onClose={() => setEditorOpen(false)} />
+        </Suspense>
+      ) : null}
       <AuthMethodDialog
         open={authDialogOpen}
         apiKey={apiKeyDraft}

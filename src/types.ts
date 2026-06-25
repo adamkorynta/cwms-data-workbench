@@ -5,6 +5,7 @@ export type TabId =
   | "location-groups"
   | "time-series-groups"
   | "locations"
+  | "published"
   | "measurements";
 
 export type EntityKind =
@@ -78,6 +79,7 @@ export interface InventoryRow {
   parentId?: string;
   depth?: number;
   selectable?: boolean;
+  hasChildren?: boolean;
   aliases?: AliasMap;
   [key: string]: unknown;
 }

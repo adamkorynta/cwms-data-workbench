@@ -27,6 +27,7 @@ interface LocationMetadata {
   mapLabel?: string;
   boundingOffice?: string;
   active?: boolean;
+  hasChildren?: boolean;
   aliases?: AliasMap;
 }
 
@@ -86,6 +87,7 @@ export function applyLocationMetadataToLocationRow(row: InventoryRow, metadata: 
     mapLabel: metadata.mapLabel ?? row.mapLabel,
     boundingOffice: metadata.boundingOffice ?? row.boundingOffice,
     active: metadata.active ?? row.active,
+    hasChildren: metadata.hasChildren ?? row.hasChildren,
     aliases: {
       ...(metadata.aliases ?? {}),
       ...(row.aliases as AliasMap | undefined),

@@ -183,6 +183,7 @@ export async function fetchLocationsInventory(): Promise<InventoryDataset> {
           kind: "location",
           label: metadata.location,
           location: metadata.location,
+          locationId: metadata.location, // Added locationId
           office: metadata.office,
           hasChildren: true,
         },

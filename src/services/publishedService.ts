@@ -3,10 +3,6 @@ import type { InventoryDataset, InventoryRow } from "../types";
 import { mapTimeSeriesCatalogEntry, parseTimeSeriesId, type TimeSeriesCatalogEntryLike } from "./timeSeriesCatalogMapper";
 import { fetchLocationMetadataCatalog } from "./locationMetadataService";
 
-export interface PublishedLocation extends InventoryRow {
-  locationId: string;
-}
-
 export interface PublishedTimeSeriesAssignment extends InventoryRow {
   timeSeriesId: string;
   parameter: string;

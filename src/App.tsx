@@ -12,7 +12,8 @@ import { PublishedPage } from "./components/PublishedPage";
 import { PublishedAssignmentDialog } from "./components/PublishedAssignmentDialog";
 import { 
   fetchPublishedLocations, 
-  fetchTimeSeriesByLocation 
+  fetchTimeSeriesByLocation,
+  PublishedTimeSeriesAssignment
 } from "./services/publishedService";
 import { AuthMethodDialog } from "./components/AuthMethodDialog";
 import { AppShell } from "./components/AppShell";
@@ -388,39 +389,58 @@ export function App() {
   };
 
   const handleLoadChildren = useCallback(async (row: InventoryRow): Promise<InventoryRow[]> => {
-    if (activeTab === "locations" && row.kind === "location") {
-      const locationId = row.id;
-      const assignments = await fetchTimeSeriesByLocation(locationId);
-      
-      // Group by parameter
-      const groups: Record<string, PublishedTimeSeriesAssignment[]> = {};
-      assignments.forEach(assignment => {
-        const p = assignment.parameter || "Unknown";
-        if (!groups[p]) groups[p] = [];
-        groups[p].push(assignment);
-      });
-
-      return Object.entries(groups)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([parameter, parameterAssignments]) => {
-          const firstAssignment = parameterAssignments[0];
-          return {
-            ...firstAssignment,
-            id: `parameter:${locationId}:${parameter}`,
-            kind: "timeSeries",
-            label: parameter,
-            location: parameter, // Show parameter in the Location column
-            locationId: parameter, 
-            timeSeriesId: firstAssignment?.timeSeriesId || "",
-            publicName: "", // Clear location-based public name for sub-records
-            longName: "",   // Clear location-based long name for sub-records
+    if (activeTab === "locations") {
+      if (row.kind === "location") {
+        // Return intermediate "Published Time Series" row
+        return [
+          {
+            id: `published-ts-root:${row.id}`,
+            kind: "timeSeries", // Using timeSeries kind so it's treated similarly for display/grouping if needed
+            label: "Published Time Series",
+            location: "Published Time Series",
+            locationId: row.locationId,
             parentId: row.id,
-            hasChildren: false,
-            selectable: true,
+            hasChildren: true,
+            selectable: false,
             depth: (row.depth ?? 0) + 1,
-            parameter: parameter,
-          };
+          },
+        ];
+      }
+
+      if (row.id.startsWith("published-ts-root:")) {
+        const locationId = row.locationId as string;
+        const assignments = await fetchTimeSeriesByLocation(locationId);
+
+        // Group by parameter
+        const groups: Record<string, PublishedTimeSeriesAssignment[]> = {};
+        assignments.forEach((assignment) => {
+          const p = assignment.parameter || "Unknown";
+          if (!groups[p]) groups[p] = [];
+          groups[p].push(assignment);
         });
+
+        return Object.entries(groups)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([parameter, parameterAssignments]) => {
+            const firstAssignment = parameterAssignments[0];
+            return {
+              ...firstAssignment,
+              id: `parameter:${locationId}:${parameter}`,
+              kind: "timeSeries",
+              label: parameter,
+              location: parameter, // Show parameter in the Location column
+              locationId: parameter,
+              timeSeriesId: firstAssignment?.timeSeriesId || "",
+              publicName: "", // Clear location-based public name for sub-records
+              longName: "", // Clear location-based long name for sub-records
+              parentId: row.id,
+              hasChildren: false,
+              selectable: true,
+              depth: (row.depth ?? 0) + 1,
+              parameter: parameter,
+            };
+          });
+      }
     }
     return [];
   }, [activeTab]);

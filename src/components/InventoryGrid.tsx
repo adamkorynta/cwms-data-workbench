@@ -19,6 +19,8 @@ interface InventoryGridProps {
   onRetry: () => void;
   onAddSelections: (entities: SelectedEntity[]) => void;
   onLoadChildren?: (row: InventoryRow) => Promise<InventoryRow[]>;
+  onRowAction?: (row: InventoryRow) => void;
+  rowActionLabel?: string;
   toolbar?: React.ReactNode;
 }
 
@@ -31,7 +33,7 @@ interface RowActionsMenuState {
 
 const selectionFlightEventName = "cwms:selection-flight";
 
-export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, onAddSelections, onLoadChildren, toolbar }: InventoryGridProps) {
+export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, onAddSelections, onLoadChildren, onRowAction, rowActionLabel, toolbar }: InventoryGridProps) {
   const actionsColumnId = "__actions__";
   const defaultColumns = dataset.columns.filter((column) => column.defaultVisible !== false).map((column) => column.id);
   const requiredVisibleColumns = useMemo(() => {
@@ -42,6 +44,7 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
     }
     if (tabId === "location-groups") return ["name", "office", "alias"];
     if (tabId === "time-series") return ["timeSeriesId", "timezone", "first", "last", "intervalOffset"];
+    if (tabId === "published") return ["locationId", "timeSeriesId"];
     return [];
   }, [dataset.columns, tabId]);
   const showSelectionColumn = tabId !== "ratings" && dataset.rows.some((row) => row.selectable !== false);
@@ -319,6 +322,7 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
       enableColumnFilter: false,
       cell: ({ row }) => {
         const isRatingEffectiveDateRow = tabId === "ratings" && row.original.nodeType === "rating-effective-date";
+        const isCustomActionRow = Boolean(onRowAction && (tabId !== "published" || row.original.kind === "location"));
         const isOpen = activeActionsRowId === row.original.id;
         return (
           <div className="row-actions" ref={isOpen ? actionsMenuRef : null}>
@@ -326,12 +330,12 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
               type="button"
               variant="subtle"
               className="row-actions-trigger"
-              disabled={!isRatingEffectiveDateRow}
+              disabled={!isRatingEffectiveDateRow && !isCustomActionRow}
               aria-label={`Open actions for ${row.original.label}`}
               aria-haspopup="menu"
               aria-expanded={isOpen}
               onClick={(event) => {
-                if (!isRatingEffectiveDateRow) return;
+                if (!isRatingEffectiveDateRow && !isCustomActionRow) return;
                 event.stopPropagation();
                 const triggerRect = event.currentTarget.getBoundingClientRect();
                 // Defer menu state update so the click handler returns quickly.
@@ -358,7 +362,7 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
     };
 
     return [actionsColumn, ...dataColumns];
-  }, [activeActionsRowId, activeVisibleColumnIds, childIds, dataset.columns, expanded, handleToggleExpand, loadingChildrenByParent, tabId]);
+  }, [activeActionsRowId, activeVisibleColumnIds, childIds, dataset.columns, expanded, handleToggleExpand, loadingChildrenByParent, onRowAction, tabId]);
 
   const table = useReactTable({
     data: rows,
@@ -674,6 +678,22 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
           >
             Edit Effective Date
           </button>
+          {onRowAction && rowActionLabel && (
+            <button
+              type="button"
+              role="menuitem"
+              className="row-actions-item"
+              disabled={tabId === "published" && actionsMenuRow?.kind !== "location"}
+              onClick={() => {
+                if (actionsMenuRow) {
+                  onRowAction(actionsMenuRow);
+                }
+                setActionsMenu(null);
+              }}
+            >
+              {rowActionLabel}
+            </button>
+          )}
         </div>
       )}
       <RatingEffectiveDateEditor open={Boolean(ratingEditorRow)} row={ratingEditorRow} onClose={() => setRatingEditorRow(null)} />

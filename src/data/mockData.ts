@@ -316,6 +316,7 @@ export const locationsDataset: InventoryDataset = {
     { id: "office", header: "Office", accessorKey: "office", group: "Naming", defaultVisible: true },
     { id: "baseLocation", header: "Base Location", accessorKey: "baseLocation", group: "Naming", defaultVisible: true },
     { id: "subLocation", header: "Sub Location", accessorKey: "subLocation", group: "Naming", defaultVisible: true },
+    { id: "publishedTimeSeriesId", header: "Published Timeseries ID", accessorKey: "timeSeriesId", group: "Naming", defaultVisible: true },
     { id: "publicName", header: "Public Name", accessorKey: "publicName", group: "Naming", defaultVisible: true },
     { id: "longName", header: "Long Name", accessorKey: "longName", group: "Naming", defaultVisible: true },
     { id: "description", header: "Description", accessorKey: "description", group: "Naming", defaultVisible: true },
@@ -354,6 +355,7 @@ export const locationsDataset: InventoryDataset = {
     timezone: index % 4 === 0 ? "US/Central" : "CST6CDT",
     publishedLatitude: 36.2 + index / 10,
     verticalDatum: index % 3 === 0 ? "NAVD88" : "NGVD29",
+    hasChildren: true,
     aliases: { ...aliasDefaults, "CBT Station ID": `${location}-CBT`, "USGS Station Number": `0716${index}500` },
   })),
 };

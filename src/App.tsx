@@ -8,6 +8,13 @@ import {
   setCdaAccessToken,
   setCdaApiKey,
 } from "./api/cdaClient";
+import { PublishedPage } from "./components/PublishedPage";
+import { PublishedAssignmentDialog } from "./components/PublishedAssignmentDialog";
+import { 
+  fetchPublishedLocations, 
+  fetchTimeSeriesByLocation,
+  PublishedTimeSeriesAssignment
+} from "./services/publishedService";
 import { AuthMethodDialog } from "./components/AuthMethodDialog";
 import { AppShell } from "./components/AppShell";
 import { FooterStatus } from "./components/FooterStatus";
@@ -30,7 +37,7 @@ import {
 import { beginOidcLogin, completeOidcLoginFromUrl, fetchOidcBootstrapConfig } from "./services/oidcService";
 import { fetchOffices } from "./services/officesService";
 import { fetchUserProfile } from "./services/userProfileService";
-import type { AppSettings, CdaOffice, InventoryDataset, SelectedEntity, TabId } from "./types";
+import type { AppSettings, CdaOffice, InventoryDataset, InventoryRow, SelectedEntity, TabId } from "./types";
 import { loadPreferences, savePreferences } from "./utils/preferences";
 import { defaultTimeWindow } from "./utils/timeWindow";
 
@@ -45,6 +52,7 @@ const tabs: TabDefinition[] = [
   { id: "location-groups", label: "Location Groups" },
   { id: "time-series-groups", label: "Time Series Groups" },
   { id: "locations", label: "Locations" },
+  { id: "published", label: "Published Timeseries" },
   { id: "measurements", label: "Measurements", disabled: true },
 ];
 
@@ -55,6 +63,7 @@ const loaders: Record<TabId, () => Promise<InventoryDataset>> = {
   "location-groups": fetchLocationGroupsInventory,
   "time-series-groups": fetchTimeSeriesGroupsInventory,
   locations: fetchLocationsInventory,
+  published: fetchPublishedLocations,
   measurements: fetchMeasurementsInventory,
 };
 
@@ -98,6 +107,8 @@ export function App() {
   const [plotOpen, setPlotOpen] = useState(false);
   const [plotInitialMode, setPlotInitialMode] = useState<PlotWorkspaceMode>("chart");
   const [editorOpen, setEditorOpen] = useState(false);
+  const [isAssignmentDialogOpen, setIsAssignmentDialogOpen] = useState(false);
+  const [selectedLocationId, setSelectedLocationId] = useState<string | undefined>(undefined);
 
   const hydrateUserFromCda = useCallback(
     async (baseUrl: string, signal?: AbortSignal) => {
@@ -377,6 +388,63 @@ export function App() {
     setSettings((current) => ({ ...current, user: "Not signed in", authStatus: "Signed out", authDetail: undefined }));
   };
 
+  const handleLoadChildren = useCallback(async (row: InventoryRow): Promise<InventoryRow[]> => {
+    if (activeTab === "locations") {
+      if (row.kind === "location") {
+        // Return intermediate "Published Time Series" row
+        return [
+          {
+            id: `published-ts-root:${row.id}`,
+            kind: "timeSeries", // Using timeSeries kind so it's treated similarly for display/grouping if needed
+            label: "Published Time Series",
+            location: "Published Time Series",
+            locationId: row.locationId,
+            parentId: row.id,
+            hasChildren: true,
+            selectable: false,
+            depth: (row.depth ?? 0) + 1,
+          },
+        ];
+      }
+
+      if (row.id.startsWith("published-ts-root:")) {
+        const locationId = row.locationId as string;
+        const assignments = await fetchTimeSeriesByLocation(locationId);
+
+        // Group by parameter
+        const groups: Record<string, PublishedTimeSeriesAssignment[]> = {};
+        assignments.forEach((assignment) => {
+          const p = assignment.parameter || "Unknown";
+          if (!groups[p]) groups[p] = [];
+          groups[p].push(assignment);
+        });
+
+        return Object.entries(groups)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([parameter, parameterAssignments]) => {
+            const firstAssignment = parameterAssignments[0];
+            return {
+              ...firstAssignment,
+              id: `parameter:${locationId}:${parameter}`,
+              kind: "timeSeries",
+              label: parameter,
+              location: parameter, // Show parameter in the Location column
+              locationId: parameter,
+              timeSeriesId: firstAssignment?.timeSeriesId || "",
+              publicName: "", // Clear location-based public name for sub-records
+              longName: "", // Clear location-based long name for sub-records
+              parentId: row.id,
+              hasChildren: false,
+              selectable: true,
+              depth: (row.depth ?? 0) + 1,
+              parameter: parameter,
+            };
+          });
+      }
+    }
+    return [];
+  }, [activeTab]);
+
   return (
     <AppShell
       settings={settings}
@@ -390,24 +458,36 @@ export function App() {
     >
       <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
       <main className="main-workbench">
-        <InventoryGrid
-          key={activeTab}
-          tabId={activeTab}
-          title={title}
-          dataset={inventory.dataset}
-          loading={inventory.loading}
-          error={inventory.error}
-          onRetry={inventory.reload}
-          onAddSelections={addSelections}
-          toolbar={
-            activeTab === "time-series" ? (
-              <GwButton type="button" variant="primary" onClick={() => setEditorOpen(true)}>
-                <Plus size={14} />
-                New Time Series
-              </GwButton>
-            ) : null
-          }
-        />
+        {activeTab === "published" ? (
+          <PublishedPage />
+        ) : (
+          <InventoryGrid
+            key={activeTab}
+            tabId={activeTab}
+            title={title}
+            dataset={inventory.dataset}
+            loading={inventory.loading}
+            error={inventory.error}
+            onRetry={inventory.reload}
+            onAddSelections={addSelections}
+            onLoadChildren={handleLoadChildren}
+            onRowAction={activeTab === "locations" ? (row) => {
+              if (row.kind === "location") {
+                setSelectedLocationId(row.locationId as string || row.id);
+                setIsAssignmentDialogOpen(true);
+              }
+            } : undefined}
+            rowActionLabel={activeTab === "locations" ? "Assign Time Series" : undefined}
+            toolbar={
+              activeTab === "time-series" ? (
+                <GwButton type="button" variant="primary" onClick={() => setEditorOpen(true)}>
+                  <Plus size={14} />
+                  New Time Series
+                </GwButton>
+              ) : null
+            }
+          />
+        )}
       </main>
       <SelectionTray
         selections={selections}
@@ -441,6 +521,11 @@ export function App() {
           <TimeSeriesEditor open={editorOpen} onClose={() => setEditorOpen(false)} />
         </Suspense>
       ) : null}
+      <PublishedAssignmentDialog 
+        open={isAssignmentDialogOpen} 
+        onClose={() => setIsAssignmentDialogOpen(false)} 
+        initialLocationId={selectedLocationId}
+      />
       <AuthMethodDialog
         open={authDialogOpen}
         apiKey={apiKeyDraft}

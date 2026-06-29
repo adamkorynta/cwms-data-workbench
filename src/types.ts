@@ -4,6 +4,7 @@ export type TabId =
   | "levels"
   | "location-groups"
   | "time-series-groups"
+  | "clobs"
   | "locations"
   | "measurements";
 
@@ -13,6 +14,7 @@ export type EntityKind =
   | "level"
   | "locationGroup"
   | "timeSeriesGroup"
+  | "clob"
   | "location"
   | "measurement";
 

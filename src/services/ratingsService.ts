@@ -74,6 +74,12 @@ interface RatingPointsGroupLike {
 	};
 }
 
+interface IndependentParameterSpecLike {
+	position?: string | number;
+	inRangeMethod?: string;
+	["in-range-method"]?: string;
+}
+
 interface SimpleRatingLike {
 	officeId?: string;
 	ratingSpecId?: string;
@@ -83,6 +89,10 @@ interface SimpleRatingLike {
 	active?: boolean | string;
 	description?: string;
 	ratingPoints?: RatingPointsGroupLike[];
+	independentParameterSpecs?: IndependentParameterSpecLike[];
+	["independent-parameter-specs"]?: unknown;
+	["ind-parameter-specs"]?: unknown;
+	["ind-parameter-spec"]?: unknown;
 	["office-id"]?: string;
 	["rating-spec-id"]?: string;
 	["units-id"]?: string;
@@ -113,6 +123,7 @@ export interface RatingEffectiveDateEditorData {
 	active: boolean;
 	description: string;
 	points: RatingEffectiveDatePoint[];
+	independentParameterInRangeMethods: string[];
 	raw: unknown;
 }
 
@@ -192,6 +203,24 @@ function parseXmlSimpleRatings(xmlText: string): SimpleRatingLike[] {
 
 	return simpleRatingElements.map((simpleRatingElement) => {
 		const ratingPointsGroups: RatingPointsGroupLike[] = [];
+		const independentParameterSpecs: IndependentParameterSpecLike[] = [];
+
+		const independentSpecsContainer =
+			getFirstDirectChild(simpleRatingElement, "ind-parameter-specs")
+			?? getFirstDirectChild(simpleRatingElement, "independent-parameter-specs");
+
+		if (independentSpecsContainer) {
+			for (const specElement of getDirectChildrenByName(independentSpecsContainer, "ind-parameter-spec")) {
+				independentParameterSpecs.push({
+					position: specElement.getAttribute("position") ?? getFirstDirectChildText(specElement, "position") ?? undefined,
+					["in-range-method"]: getFirstDirectChildText(specElement, "in-range-method")
+						?? getFirstDirectChildText(specElement, "inRangeMethod")
+						?? getFirstDirectChildText(specElement, "in-range")
+						?? undefined,
+				});
+			}
+		}
+
 		for (const ratingPointsElement of getDirectChildrenByName(simpleRatingElement, "rating-points")) {
 			const otherIndElement = getFirstDirectChild(ratingPointsElement, "other-ind");
 			const otherInd = otherIndElement
@@ -222,9 +251,99 @@ function parseXmlSimpleRatings(xmlText: string): SimpleRatingLike[] {
 			["create-date"]: getFirstDirectChildText(simpleRatingElement, "create-date"),
 			active: getFirstDirectChildText(simpleRatingElement, "active"),
 			description: getFirstDirectChildText(simpleRatingElement, "description"),
+			independentParameterSpecs,
 			["rating-points"]: ratingPointsGroups,
 		};
 	});
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	if (!value || typeof value !== "object") return null;
+	return value as Record<string, unknown>;
+}
+
+function getRecordString(record: Record<string, unknown>, keys: string[]): string {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+		if (typeof value === "number") return String(value);
+	}
+	return "";
+}
+
+function toPositiveInteger(value: unknown): number | null {
+	if (typeof value === "number") {
+		return Number.isInteger(value) && value > 0 ? value : null;
+	}
+
+	if (typeof value === "string") {
+		const parsed = Number(value.trim());
+		return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+	}
+
+	return null;
+}
+
+function normalizeIndependentParameterSpecs(simpleRating: SimpleRatingLike): IndependentParameterSpecLike[] {
+	const specs: IndependentParameterSpecLike[] = [];
+	if (Array.isArray(simpleRating.independentParameterSpecs)) {
+		specs.push(...simpleRating.independentParameterSpecs);
+	}
+
+	const containers: unknown[] = [
+		(simpleRating as Record<string, unknown>)["ind-parameter-specs"],
+		(simpleRating as Record<string, unknown>)["independent-parameter-specs"],
+		(simpleRating as Record<string, unknown>)["ind-parameter-spec"],
+	];
+
+	for (const container of containers) {
+		if (Array.isArray(container)) {
+			specs.push(...container as IndependentParameterSpecLike[]);
+			continue;
+		}
+
+		const record = asRecord(container);
+		if (!record) continue;
+
+		const directSpecs = record["ind-parameter-spec"];
+		if (Array.isArray(directSpecs)) {
+			specs.push(...directSpecs as IndependentParameterSpecLike[]);
+		} else if (asRecord(directSpecs)) {
+			specs.push(directSpecs as IndependentParameterSpecLike);
+		}
+	}
+
+	return specs;
+}
+
+function extractIndependentParameterInRangeMethods(simpleRating: SimpleRatingLike): string[] {
+	const methods = ["", "", "", "", ""];
+	const unpositionedMethods: string[] = [];
+
+	for (const spec of normalizeIndependentParameterSpecs(simpleRating)) {
+		const record = asRecord(spec);
+		if (!record) continue;
+
+		const method = getRecordString(record, ["inRangeMethod", "in-range-method", "in-range", "inRange"]);
+		if (!method) continue;
+
+		const position = toPositiveInteger(record.position);
+		if (position && position <= methods.length && !methods[position - 1]) {
+			methods[position - 1] = method;
+			continue;
+		}
+
+		unpositionedMethods.push(method);
+	}
+
+	for (let index = 0; index < methods.length; index += 1) {
+		if (methods[index]) continue;
+		const next = unpositionedMethods.shift();
+		if (!next) break;
+		methods[index] = next;
+	}
+
+	return methods;
 }
 
 function pickSimpleRatings(response: unknown): SimpleRatingLike[] {
@@ -485,27 +604,37 @@ function mapSpecRows(
 }
 
 export async function fetchRatingsInventory(): Promise<InventoryDataset> {
-	const ratingsApi = await createCwmsApi<{
-		getRatingsTemplate: (request?: { office?: string; page?: string; pageSize?: number }) => Promise<RatingTemplatesLike>;
-		getRatingsSpec: (request?: { office?: string; page?: string; pageSize?: number }) => Promise<RatingSpecsLike>;
-	}>("RatingsApi");
+	const [templatesApi, specsApi] = await Promise.all([
+		createCwmsApi<{
+			getRatingsTemplate: (request?: { office?: string; page?: string; pageSize?: number }) => Promise<RatingTemplatesLike>;
+			getRatingsSpec: (request?: { office?: string; page?: string; pageSize?: number }) => Promise<RatingSpecsLike>;
+		}>("RatingsApi"),
+		createCwmsApi<{
+			getRatingsTemplate: (request?: { office?: string; page?: string; pageSize?: number }) => Promise<RatingTemplatesLike>;
+			getRatingsSpec: (request?: { office?: string; page?: string; pageSize?: number }) => Promise<RatingSpecsLike>;
+		}>("RatingsApi"),
+	]);
 
-	if (!ratingsApi) {
+	if (!templatesApi || !specsApi) {
 		throw new Error("CWMS ratings API is unavailable.");
 	}
 
 	const { office } = getCdaConfig();
 
+	const templatesPromise = fetchAllPages(
+		(page) => templatesApi.getRatingsTemplate({ office, page, pageSize: 500 }),
+		(response) => response.templates,
+	);
+	const specsPromise = fetchAllPages(
+		(page) => specsApi.getRatingsSpec({ office, page, pageSize: 500 }),
+		(response) => response.specs,
+	);
+	const locationMetadataPromise = fetchLocationMetadataById();
+
 	const [templatesResult, specsResult, locationMetadataById] = await Promise.all([
-		fetchAllPages(
-			(page) => ratingsApi.getRatingsTemplate({ office, page, pageSize: 500 }),
-			(response) => response.templates,
-		),
-		fetchAllPages(
-			(page) => ratingsApi.getRatingsSpec({ office, page, pageSize: 500 }),
-			(response) => response.specs,
-		),
-		fetchLocationMetadataById(),
+		templatesPromise,
+		specsPromise,
+		locationMetadataPromise,
 	]);
 
 	const templateById = new Map(
@@ -570,6 +699,7 @@ export async function fetchRatingEffectiveDateEditorData(
 		active: asBoolean(matching.active),
 		description: asString(matching.description),
 		points: flattenRatingPoints(matching.ratingPoints ?? matching["rating-points"]),
+		independentParameterInRangeMethods: extractIndependentParameterInRangeMethods(matching),
 		raw: payload,
 	};
 }

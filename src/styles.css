@@ -1060,10 +1060,22 @@ dd {
   box-shadow: 0 20px 60px rgb(0 0 0 / 22%);
 }
 
+.clob-value-dialog {
+  width: min(900px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 32px));
+  background: #fff;
+  border: 1px solid #9aa8b3;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 22%);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
 .time-window-dialog header,
 .auth-method-dialog header,
+.clob-value-dialog header,
 .time-window-dialog footer,
 .auth-method-dialog footer,
+.clob-value-dialog footer,
 .plot-workspace header,
 .rating-editor header,
 .ts-editor header,
@@ -1086,6 +1098,20 @@ dd {
   flex-wrap: wrap;
 }
 
+.clob-value-dialog header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.clob-value-dialog header span {
+  overflow: hidden;
+  color: #52606d;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .plot-workspace header .parameter-label {
   font-size: 12px;
   color: #666;
@@ -1100,6 +1126,7 @@ dd {
 
 .time-window-dialog footer,
 .auth-method-dialog footer,
+.clob-value-dialog footer,
 .rating-editor footer,
 .ts-editor footer {
   border-top: 1px solid #d3dae1;
@@ -1141,6 +1168,41 @@ dd {
   border-radius: 4px;
   padding: 6px 8px;
   font-size: 12px;
+}
+
+.clob-dialog-body {
+  min-height: 260px;
+  overflow: auto;
+  align-content: start;
+}
+
+.clob-dialog-body .state-overlay {
+  position: static;
+  width: fit-content;
+}
+
+.clob-description {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid #d3dae1;
+  background: #f7fafc;
+  font-size: 12px;
+}
+
+.clob-value {
+  min-height: 220px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #cbd4dc;
+  background: #f8fafc;
+  color: #111827;
+  font-family: Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .dialog-body {
@@ -1290,15 +1352,52 @@ fieldset {
 
 .rating-editor-chart-panel {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 4px;
   padding: 4px;
+}
+
+.rating-editor-axis-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rating-editor-axis-controls button {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.rating-editor-axis-controls button.active {
+  background: #dbeafe;
+  border-color: #1d4ed8;
+  color: #1e3a8a;
+  font-weight: 700;
+}
+
+.rating-editor-axis-note {
+  font-size: 11px;
+  color: #7c2d12;
+  background: #ffedd5;
+  border: 1px solid #fed7aa;
+  border-radius: 4px;
+  padding: 2px 6px;
 }
 
 .rating-editor-chart-wrap {
   min-height: 0;
+  height: 100%;
   border: 1px solid #c0c8d0;
   background: #f1f3f5;
   position: relative;
+}
+
+.rating-editor-chart-wrap .js-plotly-plot,
+.rating-editor-chart-wrap .plot-container,
+.rating-editor-chart-wrap .svg-container {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .rating-editor-chart-tooltip {

@@ -19,6 +19,8 @@ interface InventoryGridProps {
   onRetry: () => void;
   onAddSelections: (entities: SelectedEntity[]) => void;
   onLoadChildren?: (row: InventoryRow) => Promise<InventoryRow[]>;
+  onRowDoubleClick?: (row: InventoryRow) => void;
+  showActionsColumn?: boolean;
   toolbar?: React.ReactNode;
 }
 
@@ -31,7 +33,19 @@ interface RowActionsMenuState {
 
 const selectionFlightEventName = "cwms:selection-flight";
 
-export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, onAddSelections, onLoadChildren, toolbar }: InventoryGridProps) {
+export function InventoryGrid({
+  tabId,
+  title,
+  dataset,
+  loading,
+  error,
+  onRetry,
+  onAddSelections,
+  onLoadChildren,
+  onRowDoubleClick,
+  showActionsColumn = true,
+  toolbar,
+}: InventoryGridProps) {
   const actionsColumnId = "__actions__";
   const defaultColumns = dataset.columns.filter((column) => column.defaultVisible !== false).map((column) => column.id);
   const requiredVisibleColumns = useMemo(() => {
@@ -357,8 +371,8 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
       meta: { group: "", width: 42 },
     };
 
-    return [actionsColumn, ...dataColumns];
-  }, [activeActionsRowId, activeVisibleColumnIds, childIds, dataset.columns, expanded, handleToggleExpand, loadingChildrenByParent, tabId]);
+    return showActionsColumn ? [actionsColumn, ...dataColumns] : dataColumns;
+  }, [activeActionsRowId, activeVisibleColumnIds, childIds, dataset.columns, expanded, handleToggleExpand, loadingChildrenByParent, showActionsColumn, tabId]);
 
   const table = useReactTable({
     data: rows,
@@ -542,7 +556,7 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
           <table className="inventory-grid">
             <thead>
               <tr className="group-row">
-                <th aria-label="actions column" />
+                {showActionsColumn && <th aria-label="actions column" />}
                 {showSelectionColumn && <th aria-label="select column" />}
                 {groupedHeaders.map((group, index) => (
                   <th key={`${group.group}-${index}`} colSpan={group.span}>{group.group}</th>
@@ -593,6 +607,11 @@ export function InventoryGrid({ tabId, title, dataset, loading, error, onRetry, 
                       const target = event.target;
                       if (!(target instanceof Element)) return;
                       if (target.closest("button, input, label, [role='menu']")) return;
+
+                      if (onRowDoubleClick) {
+                        onRowDoubleClick(row.original);
+                        return;
+                      }
 
                       const entities = resolveEntitiesForRow(row.original);
                       if (!entities.length) return;

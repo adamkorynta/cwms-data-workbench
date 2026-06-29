@@ -16,6 +16,12 @@ interface CurveSeries {
   color: string;
 }
 
+interface PlottedCurveSeries {
+  openingLabel: string;
+  points: TracePoint[];
+  color: string;
+}
+
 interface ActiveChartPoint {
   pointKey: string;
   x: number;
@@ -27,6 +33,15 @@ interface PlotlyHoverEvent {
   points?: Array<{
     customdata?: unknown;
   }>;
+}
+
+type InterpolationMode = "linear" | "log" | "none";
+
+interface TracePoint {
+  x: number;
+  y: number;
+  pointKey?: string;
+  seriesLabel: string;
 }
 
 const PlotComponent = (() => {
@@ -75,7 +90,9 @@ function resolveRatingId(row: InventoryRow | null): string {
 }
 
 function asNumber(value: string): number | null {
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -121,6 +138,52 @@ function buildPointKey(point: RatingEffectiveDatePoint, index: number): string {
   return `${index}:${point.otherIndependentValue}:${point.independentValue}:${point.dependentValue}`;
 }
 
+function resolveInterpolationMode(method: string): InterpolationMode {
+  const normalized = method.trim().toUpperCase();
+  if (!normalized) return "linear";
+  if (normalized.includes("LOG")) return "log";
+  if (normalized.includes("NULL") || normalized === "NONE") return "none";
+  return "linear";
+}
+
+function interpolateSeriesPoints(points: TracePoint[], mode: InterpolationMode): TracePoint[] {
+  if (points.length <= 1 || mode !== "log") return points;
+
+  const samplesPerSegment = 1000;
+  const interpolated: TracePoint[] = [points[0]];
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+
+    const canLogInterpolate = previous.x > 0
+      && current.x > 0
+      && previous.y > 0
+      && current.y > 0
+      && previous.x !== current.x;
+
+    if (canLogInterpolate) {
+      const previousLogX = Math.log(previous.x);
+      const currentLogX = Math.log(current.x);
+      const previousLogY = Math.log(previous.y);
+      const currentLogY = Math.log(current.y);
+
+      for (let step = 1; step < samplesPerSegment; step += 1) {
+        const t = step / samplesPerSegment;
+        interpolated.push({
+          x: Math.exp(previousLogX + (currentLogX - previousLogX) * t),
+          y: Math.exp(previousLogY + (currentLogY - previousLogY) * t),
+          seriesLabel: current.seriesLabel,
+        });
+      }
+    }
+
+    interpolated.push(current);
+  }
+
+  return interpolated;
+}
+
 export function RatingEffectiveDateEditor({ open, row, onClose }: RatingEffectiveDateEditorProps) {
   const ratingId = resolveRatingId(row);
   const effectiveDate = asText(row?.effectiveDate) || asText(row?.label);
@@ -131,6 +194,8 @@ export function RatingEffectiveDateEditor({ open, row, onClose }: RatingEffectiv
   const [data, setData] = useState<RatingEffectiveDateEditorData | null>(null);
   const [draftPoints, setDraftPoints] = useState<RatingEffectiveDatePoint[]>([]);
   const [hoverPointKey, setHoverPointKey] = useState<string | null>(null);
+  const [isXAxisLog, setIsXAxisLog] = useState(false);
+  const [isYAxisLog, setIsYAxisLog] = useState(false);
   const plotHostRef = useRef<any>(null);
   const hoverClearTimeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
 
@@ -144,6 +209,8 @@ export function RatingEffectiveDateEditor({ open, row, onClose }: RatingEffectiv
         setData(nextData);
         setDraftPoints(nextData.points.map(clonePoint));
         setHoverPointKey(null);
+        setIsXAxisLog(false);
+        setIsYAxisLog(false);
       })
       .catch((error_: unknown) => {
         setData(null);
@@ -242,21 +309,46 @@ export function RatingEffectiveDateEditor({ open, row, onClose }: RatingEffectiv
     units.independentUnits[Math.max(0, parameterLabels.independent.length - 1)],
   );
   const dependentHeader = withUnit(dependentLabel, units.dependentUnit);
+  const primaryIndependentParameterIndex = Math.min(5, Math.max(1, parameterLabels.independent.length || 1));
+  const primaryInterpolationMethod = data?.independentParameterInRangeMethods[primaryIndependentParameterIndex - 1] ?? "";
+  const interpolationMode = useMemo(
+    () => resolveInterpolationMode(primaryInterpolationMethod),
+    [primaryInterpolationMethod],
+  );
+  const interpolationLabel = primaryInterpolationMethod || "LINEAR";
+  const interpolationMethodSummary = useMemo(() => {
+    const methods = data?.independentParameterInRangeMethods ?? [];
+    return methods
+      .map((method, index) => method.trim() ? `IP${index + 1}=${method.trim()}` : "")
+      .filter(Boolean)
+      .join(" | ");
+  }, [data?.independentParameterInRangeMethods]);
+
+  const plottedCurveSeries = useMemo<PlottedCurveSeries[]>(() => (
+    curveSeries.map((series) => ({
+      ...series,
+      points: interpolateSeriesPoints(series.points, interpolationMode),
+    }))
+  ), [curveSeries, interpolationMode]);
 
   const plotData = useMemo(() => {
-    const lineTraces: any[] = curveSeries.map((series) => ({
+    const lineMode = interpolationMode === "none" ? "markers" : "lines";
+    const lineTraces: any[] = plottedCurveSeries.map((series) => ({
       x: series.points.map((point) => point.x),
       y: series.points.map((point) => point.y),
-      customdata: series.points.map((point) => point.pointKey),
+      customdata: series.points.map((point) => point.pointKey ?? null),
       type: "scatter" as const,
-      mode: "lines",
+      mode: lineMode,
       line: {
         color: series.color,
         width: 2,
       },
+      marker: interpolationMode === "none"
+        ? { color: series.color, size: 5 }
+        : undefined,
       hovertemplate: `${dependentHeader}: %{x:.3f}<br>${primaryIndependentHeader}: %{y:.3f}<extra>${hasSecondaryIndependent ? `${secondaryIndependentLabel} ${series.openingLabel}` : primaryIndependentLabel}</extra>`,
       name: hasSecondaryIndependent ? `${secondaryIndependentLabel} ${series.openingLabel}` : primaryIndependentLabel,
-      showlegend: curveSeries.length > 1,
+      showlegend: plottedCurveSeries.length > 1,
     }));
 
     if (!activeChartPoint) return lineTraces;
@@ -277,7 +369,7 @@ export function RatingEffectiveDateEditor({ open, row, onClose }: RatingEffectiv
     });
 
     return lineTraces;
-  }, [activeChartPoint, curveSeries, dependentHeader, hasSecondaryIndependent, primaryIndependentHeader, primaryIndependentLabel, secondaryIndependentLabel]);
+  }, [activeChartPoint, dependentHeader, hasSecondaryIndependent, interpolationMode, plottedCurveSeries, primaryIndependentHeader, primaryIndependentLabel, secondaryIndependentLabel]);
 
   const plotRanges = useMemo(() => {
     const allPoints = curveSeries.flatMap((series) => series.points);
@@ -316,8 +408,9 @@ export function RatingEffectiveDateEditor({ open, row, onClose }: RatingEffectiv
     },
     xaxis: {
       title: dependentHeader,
-      autorange: !plotRanges,
-      range: plotRanges?.x,
+      type: isXAxisLog ? "log" : "linear",
+      autorange: isXAxisLog ? true : !plotRanges,
+      range: isXAxisLog ? undefined : plotRanges?.x,
       zeroline: false,
       showgrid: true,
       gridcolor: "#d0d0d0",
@@ -325,14 +418,15 @@ export function RatingEffectiveDateEditor({ open, row, onClose }: RatingEffectiv
     },
     yaxis: {
       title: primaryIndependentHeader,
-      autorange: !plotRanges,
-      range: plotRanges?.y,
+      type: isYAxisLog ? "log" : "linear",
+      autorange: isYAxisLog ? true : !plotRanges,
+      range: isYAxisLog ? undefined : plotRanges?.y,
       zeroline: false,
       showgrid: true,
       gridcolor: "#d0d0d0",
       automargin: true,
     },
-  }), [curveSeries.length, dependentHeader, plotRanges, primaryIndependentHeader]);
+  }), [curveSeries.length, dependentHeader, isXAxisLog, isYAxisLog, plotRanges, primaryIndependentHeader]);
 
   const handlePlotHover = (event: PlotlyHoverEvent) => {
     if (hoverClearTimeoutRef.current !== null) {
@@ -423,6 +517,26 @@ export function RatingEffectiveDateEditor({ open, row, onClose }: RatingEffectiv
 
               <section className="rating-editor-content">
                 <aside className="rating-editor-chart-panel">
+                  <div className="rating-editor-axis-controls">
+                    <button
+                      type="button"
+                      className={isXAxisLog ? "active" : ""}
+                      onClick={() => setIsXAxisLog((current) => !current)}
+                    >
+                      X Axis: {isXAxisLog ? "Log" : "Linear"}
+                    </button>
+                    <button
+                      type="button"
+                      className={isYAxisLog ? "active" : ""}
+                      onClick={() => setIsYAxisLog((current) => !current)}
+                    >
+                      Y Axis: {isYAxisLog ? "Log" : "Linear"}
+                    </button>
+                    <button type="button" disabled>
+                      Interpolation (IP{primaryIndependentParameterIndex} In Range): {interpolationLabel}
+                    </button>
+                  </div>
+                  {interpolationMethodSummary ? <p className="rating-editor-note">{interpolationMethodSummary}</p> : null}
                   <div className="rating-editor-chart-wrap">
                     {PlotComponent ? (
                       <PlotComponent

@@ -172,6 +172,107 @@ export async function fetchTimeSeriesGroupsInventory(): Promise<InventoryDataset
   return fetchTimeSeriesGroupsInventoryFromService();
 }
 
+interface ClobCatalogEntryLike {
+  officeId?: string;
+  id?: string;
+  description?: string;
+  value?: string;
+}
+
+interface ClobsResponseLike {
+  clobs?: ClobCatalogEntryLike[];
+  nextPage?: string;
+  total?: number;
+}
+
+interface ClobApiLike {
+  getClobs: (request?: {
+    office?: string;
+    page?: string;
+    pageSize?: number;
+    includeValues?: boolean;
+    like?: string;
+  }) => Promise<ClobsResponseLike>;
+  getClobsWithClobId: (request: {
+    clobId: string;
+    office?: string;
+    clobId2?: string;
+  }) => Promise<ClobCatalogEntryLike>;
+}
+
+export async function fetchClobsInventory(): Promise<InventoryDataset> {
+  const api = await createCwmsApi<ClobApiLike>("ClobApi");
+  if (!api) {
+    throw new Error("CWMS CLOB API client is unavailable.");
+  }
+
+  const { office } = getCdaConfig();
+  const paged = await fetchAllPages(
+    async (page, pageSize) => {
+      const response = await api.getClobs({
+        office,
+        page,
+        pageSize,
+        includeValues: false,
+      });
+
+      return {
+        rows: (response.clobs ?? []).map((clob) => {
+          const officeId = clob.officeId ?? office;
+          const id = clob.id ?? "";
+          return {
+            id: `${officeId}:${id}`,
+            kind: "clob" as const,
+            label: id,
+            office: officeId,
+            clobId: id,
+            description: clob.description,
+            selectable: false,
+          };
+        }),
+        nextPageToken: response.nextPage,
+        total: response.total,
+      };
+    },
+    { pageSize: 500, maxPages: 1000, allowPartial: true },
+  );
+
+  return {
+    rows: paged.rows,
+    columns: [
+      {
+        id: "office",
+        header: "Office",
+        accessorKey: "office",
+        group: "CLOB Catalog",
+        width: 140,
+        defaultVisible: true,
+      },
+      {
+        id: "clobId",
+        header: "Id",
+        accessorKey: "clobId",
+        group: "CLOB Catalog",
+        width: 420,
+        defaultVisible: true,
+      },
+    ],
+    pageInfo: paged.pageInfo,
+  };
+}
+
+export async function fetchClobValue(office: string, clobId: string): Promise<ClobCatalogEntryLike> {
+  const api = await createCwmsApi<ClobApiLike>("ClobApi");
+  if (!api) {
+    throw new Error("CWMS CLOB API client is unavailable.");
+  }
+
+  return api.getClobsWithClobId({
+    office,
+    clobId,
+  });
+}
+
 export async function fetchLocationsInventory(): Promise<InventoryDataset> {
   const metadataCatalog = await fetchLocationMetadataCatalog();
   return {

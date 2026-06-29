@@ -10,6 +10,7 @@ import {
 } from "./api/cdaClient";
 import { AuthMethodDialog } from "./components/AuthMethodDialog";
 import { AppShell } from "./components/AppShell";
+import { ClobValueDialog } from "./components/ClobValueDialog";
 import { FooterStatus } from "./components/FooterStatus";
 import { GwButton } from "./components/GroundworkControls";
 import { InventoryGrid } from "./components/InventoryGrid";
@@ -24,13 +25,14 @@ import {
   fetchLocationsInventory,
   fetchMeasurementsInventory,
   fetchRatingsInventory,
+  fetchClobsInventory,
   fetchTimeSeriesGroupsInventory,
   fetchTimeSeriesInventory,
 } from "./services/inventoryServices";
 import { beginOidcLogin, completeOidcLoginFromUrl, fetchOidcBootstrapConfig } from "./services/oidcService";
 import { fetchOffices } from "./services/officesService";
 import { fetchUserProfile } from "./services/userProfileService";
-import type { AppSettings, CdaOffice, InventoryDataset, SelectedEntity, TabId } from "./types";
+import type { AppSettings, CdaOffice, InventoryDataset, InventoryRow, SelectedEntity, TabId } from "./types";
 import { loadPreferences, savePreferences } from "./utils/preferences";
 import { defaultTimeWindow } from "./utils/timeWindow";
 
@@ -44,6 +46,7 @@ const tabs: TabDefinition[] = [
   { id: "levels", label: "Location Levels", disabled: true },
   { id: "location-groups", label: "Location Groups" },
   { id: "time-series-groups", label: "Time Series Groups" },
+  { id: "clobs", label: "CLOBs" },
   { id: "locations", label: "Locations" },
   { id: "measurements", label: "Measurements", disabled: true },
 ];
@@ -54,6 +57,7 @@ const loaders: Record<TabId, () => Promise<InventoryDataset>> = {
   levels: fetchLevelsInventory,
   "location-groups": fetchLocationGroupsInventory,
   "time-series-groups": fetchTimeSeriesGroupsInventory,
+  clobs: fetchClobsInventory,
   locations: fetchLocationsInventory,
   measurements: fetchMeasurementsInventory,
 };
@@ -98,6 +102,7 @@ export function App() {
   const [plotOpen, setPlotOpen] = useState(false);
   const [plotInitialMode, setPlotInitialMode] = useState<PlotWorkspaceMode>("chart");
   const [editorOpen, setEditorOpen] = useState(false);
+  const [clobDialogRow, setClobDialogRow] = useState<InventoryRow | null>(null);
 
   const hydrateUserFromCda = useCallback(
     async (baseUrl: string, signal?: AbortSignal) => {
@@ -399,6 +404,8 @@ export function App() {
           error={inventory.error}
           onRetry={inventory.reload}
           onAddSelections={addSelections}
+          showActionsColumn={activeTab !== "clobs"}
+          onRowDoubleClick={activeTab === "clobs" ? setClobDialogRow : undefined}
           toolbar={
             activeTab === "time-series" ? (
               <GwButton type="button" variant="primary" onClick={() => setEditorOpen(true)}>
@@ -441,6 +448,7 @@ export function App() {
           <TimeSeriesEditor open={editorOpen} onClose={() => setEditorOpen(false)} />
         </Suspense>
       ) : null}
+      <ClobValueDialog row={clobDialogRow} onClose={() => setClobDialogRow(null)} />
       <AuthMethodDialog
         open={authDialogOpen}
         apiKey={apiKeyDraft}
